@@ -1,4 +1,5 @@
 using BitcoinWallpaper.Host.Install;
+using BitcoinWallpaper.Host.Screensaver;
 
 namespace BitcoinWallpaper.Host.Settings;
 
@@ -9,6 +10,7 @@ public enum TrayCommand
     Exit,
     OpenLogs,
     Version,
+    UseAsScreensaver,
 }
 
 public sealed record TrayMenuItem(TrayCommand Command, string Text, bool Checked, bool Enabled = true);
@@ -21,13 +23,15 @@ public sealed record TrayMenuItem(TrayCommand Command, string Text, bool Checked
 /// <param name="openFolder">Opens a folder in Explorer; without it there is no Open logs item (D-26).</param>
 /// <param name="logsDirectory">What Open logs opens; null is <see cref="Log.Directory"/>.</param>
 /// <param name="version">Shown greyed as "Version x.y.z"; null leaves the item out (D-26).</param>
+/// <param name="screensaver">The "Use as screensaver" check mark (D-21); null leaves the item out.</param>
 public sealed class TrayMenuModel(
     WallpaperToggle toggle,
     Autostart autostart,
     Action exit,
     Action<string>? openFolder = null,
     string? logsDirectory = null,
-    string? version = null)
+    string? version = null,
+    ScreensaverSetting? screensaver = null)
 {
     /// <summary>Read afresh each time the menu opens.</summary>
     public IReadOnlyList<TrayMenuItem> Items
@@ -40,6 +44,11 @@ public sealed class TrayMenuModel(
                     toggle.State == WallpaperState.On ? "Turn wallpaper off" : "Turn wallpaper on", false),
                 new(TrayCommand.StartWithWindows, "Start with Windows", autostart.IsEnabled),
             };
+            if (screensaver is not null)
+            {
+                items.Add(new(TrayCommand.UseAsScreensaver, "Use as screensaver", screensaver.IsOn));
+            }
+
             if (openFolder is not null)
             {
                 items.Add(new(TrayCommand.OpenLogs, "Open logs", false));
@@ -72,6 +81,9 @@ public sealed class TrayMenuModel(
                     autostart.Enable();
                 }
 
+                break;
+            case TrayCommand.UseAsScreensaver:
+                screensaver?.Toggle();
                 break;
             case TrayCommand.Exit:
                 exit();
