@@ -1,4 +1,7 @@
 // Contract #4, criteria 1 and 2: the layout engine.
+// Contract #18 (D-20): the content spans the full screen width; nothing is reserved for desktop icons any more.
+// The tests that asserted the left 8 % icon safe area now assert that the plot starts at the left margin
+// (<= 1 % of the width); IconSafeArea is no longer read by these tests (the worker may drop it).
 //
 // API these tests need (the worker implements it as written, in src/Chart.Core/Layout/):
 //
@@ -21,14 +24,15 @@
 //       RectPx TimeAxis;      // time labels, under the volume pane
 //       RectPx VolumePane;    // volume bars, directly under the plot, same x-range as the plot
 //       RectPx Headline;      // price, 24h change, H/L/volume row, pair + source
-//       RectPx IconSafeArea;  // left 8 % of the width, full height
+//       (IconSafeArea: dropped from the sketch by D-20 / #18; no test reads it)
 //       TextSizes Text;
 //       double CandlePitchPx;      // slot width per candle
 //       double CandleBodyWidthPx;  // ~62 % of the pitch
 //       double WickWidthPx;        // 1 desk, 2 TV
 //       int CandleCount;           // the candleCount passed to Compute
 //       int CandleSlots;           // floor(Plot.Width / CandlePitchPx)
-//       int RightOffsetBars;       // ~8 empty slots right of the newest candle
+//       int RightOffsetBars;       // 0 (owner 2026-10-31): no empty slot right of the newest candle;
+//                                  // Plot.X == 0 (D-30); PriceAxis spans Plot.Right .. WidthPx (round 7)
 //       int DrawnCandleCount;      // min(CandleCount, CandleSlots - RightOffsetBars)
 //       int FirstDrawnIndex;       // CandleCount - DrawnCandleCount (index 0 = oldest candle)
 //       double CandleCenterX(int index);
@@ -46,7 +50,7 @@
 //   }
 //
 // Where the spec gives a percentage the tests use a tolerance; where it leaves freedom they check
-// invariants (inside the screen, no overlap, nothing but the chart body in the icon safe area,
+// invariants (inside the screen, no overlap, the plot from the left margin to the price axis,
 // readable text) instead of exact positions.
 
 using BitcoinWallpaper.Chart.Core.Layout;
@@ -131,26 +135,17 @@ public class LayoutEngineTests
         }
     }
 
+    // D-20 (#18): replaces "Icon_safe_area_is_the_left_8_percent_full_height" and
+    // "Nothing_but_the_chart_body_enters_the_icon_safe_area": there is no icon safe area any more.
+    // D-30 (#18, owner 2026-10-31): was "..._at_the_left_margin_..." with -0.5 <= Plot.X <= 1 % W; now no left margin.
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Icon_safe_area_is_the_left_8_percent_full_height(int w, int h, double s)
-    {
-        var a = Layout(w, h, s).IconSafeArea;
-        Assert.Equal(0, a.X, 1);
-        Assert.Equal(0, a.Y, 1);
-        Assert.True(Math.Abs(a.Width - 0.08 * w) <= 1, $"safe area width {a.Width}, expected {0.08 * w}");
-        Assert.True(Math.Abs(a.Height - h) <= 1, $"safe area height {a.Height}, expected {h}");
-    }
-
-    [Theory]
-    [MemberData(nameof(Screens))]
-    public void Nothing_but_the_chart_body_enters_the_icon_safe_area(int w, int h, double s)
+    public void Plot_starts_at_the_left_screen_edge_nothing_is_reserved_for_icons(int w, int h, double s)
     {
         var l = Layout(w, h, s);
-        // Plot and VolumePane are the chart body and may extend under it unlabelled; text may not.
-        Assert.False(Overlaps(l.PriceAxis, l.IconSafeArea), $"price axis {l.PriceAxis} in the safe area");
-        Assert.False(Overlaps(l.TimeAxis, l.IconSafeArea), $"time axis {l.TimeAxis} in the safe area");
-        Assert.False(Overlaps(l.Headline, l.IconSafeArea), $"headline {l.Headline} in the safe area");
+        Assert.True(Math.Abs(l.Plot.X) <= 0.5, $"plot starts at {l.Plot.X}, expected the left screen edge (0)");
+        Assert.True(Math.Abs(l.VolumePane.X - l.Plot.X) <= 1, $"volume pane {l.VolumePane} does not start with the plot {l.Plot}");
+        Assert.True(Math.Abs(l.TimeAxis.X - l.Plot.X) <= 1, $"time axis {l.TimeAxis} does not start with the plot {l.Plot}");
     }
 
     [Theory]
@@ -188,6 +183,17 @@ public class LayoutEngineTests
             $"price axis width {l.PriceAxis.Width} too narrow for {l.Text.AxisLabelPx} px labels");
     }
 
+    // Owner 2026-10-31 (round 7): the price-axis column spans Plot.Right .. the screen width, and its labels and tags
+    // are centred in it (renderer: PriceAxisCentringTests, PriceAxisItemsTests). Replaces
+    // "Price_axis_ends_about_1_5_percent_from_the_right_screen_edge" (InRange(PriceAxis.Right, 98 % W, 99 % W)).
+    [Theory]
+    [MemberData(nameof(Screens))]
+    public void Price_axis_column_runs_to_the_right_screen_edge(int w, int h, double s)
+    {
+        var l = Layout(w, h, s);
+        Assert.True(Math.Abs(Right(l.PriceAxis) - w) <= 0.5, $"price axis {l.PriceAxis} ends at {Right(l.PriceAxis)}, expected the screen width {w}");
+    }
+
     [Theory]
     [MemberData(nameof(Screens))]
     public void Volume_pane_is_under_the_plot_and_time_axis_under_the_volume(int w, int h, double s)
@@ -216,26 +222,32 @@ public class LayoutEngineTests
     }
 
     [Fact]
-    public void Ultrawide_32_9_chart_spans_8_to_97_percent_with_headline_top_right()
+    public void Ultrawide_32_9_chart_spans_the_left_edge_to_the_right_edge_with_headline_top_right()
     {
         const int w = 5120, h = 1440;
         var l = Layout(w, h, 1.75);
-        Assert.True(Math.Abs(l.Plot.X - 0.08 * w) <= 0.005 * w, $"plot starts at {l.Plot.X}, expected ~{0.08 * w}");
-        Assert.InRange(Right(l.PriceAxis), 0.96 * w, 0.98 * w);
+        // D-20 (#18): was "plot starts at ~8 % (±0.5 %)"; D-30: was "-0.5 <= Plot.X <= 1 % W", now the left edge.
+        Assert.True(Math.Abs(l.Plot.X) <= 0.5, $"plot starts at {l.Plot.X}, expected the left screen edge (0)");
+        // Round 7: was InRange(PriceAxis.Right, 98 % W, 99 % W) (D-30: 96-98 % before that); the price-axis column
+        // now runs to the screen edge.
+        Assert.True(Math.Abs(Right(l.PriceAxis) - w) <= 0.5, $"price axis ends at {Right(l.PriceAxis)}, expected {w}");
         Assert.True(l.Headline.X >= w / 2.0, $"headline {l.Headline} not on the right");
         Assert.True(l.Headline.Y <= 0.06 * h, $"headline {l.Headline} not at the top");
         var toAxis = l.PriceAxis.X - Right(l.Headline);
         Assert.True(toAxis >= -0.5 && toAxis <= 0.05 * w, $"headline {l.Headline} not top-right next to axis {l.PriceAxis}");
     }
 
+    // D-20 (#18, owner 2026-10-31): was "..._at_10_percent" with |Headline.X - 10 % W| <= 1 % W; the headline now
+    // sits at the left margin.
     [Theory]
     [InlineData(3840, 2160, 1.0)]
     [InlineData(3840, 2160, 1.5)]
     [InlineData(1920, 1080, 1.0)]
-    public void Wide_16_9_headline_is_top_left_at_10_percent(int w, int h, double s)
+    public void Wide_16_9_headline_is_top_left_at_the_left_margin(int w, int h, double s)
     {
         var l = Layout(w, h, s);
-        Assert.True(Math.Abs(l.Headline.X - 0.10 * w) <= 0.01 * w, $"headline x {l.Headline.X}, expected ~{0.10 * w}");
+        Assert.True(l.Headline.X >= -0.5 && l.Headline.X <= 0.02 * w,
+            $"headline x {l.Headline.X}, expected the left margin (<= 2 % of {w} = {0.02 * w})");
         Assert.True(l.Headline.Y <= 0.08 * h, $"headline {l.Headline} not at the top");
     }
 
@@ -363,11 +375,14 @@ public class LayoutEngineTests
         Assert.Equal((int)Math.Floor(l.Plot.Width / l.CandlePitchPx + 1e-9), l.CandleSlots);
     }
 
+    // Owner, 2026-10-31 (after the corrected mockup): the candles and averages run up to the price axis with no
+    // empty gap - the newest candle takes the last slot before the axis. Replaces "Right_offset_is_about_8_bars"
+    // (InRange(RightOffsetBars, 6, 10)).
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Right_offset_is_about_8_bars(int w, int h, double s)
+    public void Right_offset_is_zero_the_newest_candle_takes_the_last_slot(int w, int h, double s)
     {
-        Assert.InRange(Layout(w, h, s).RightOffsetBars, 6, 10);
+        Assert.Equal(0, Layout(w, h, s).RightOffsetBars);
     }
 
     [Theory]
@@ -432,6 +447,6 @@ public class LayoutEngineTests
     private static IEnumerable<(string, RectPx)> Rects(ChartLayout l) =>
     [
         ("Plot", l.Plot), ("PriceAxis", l.PriceAxis), ("TimeAxis", l.TimeAxis),
-        ("VolumePane", l.VolumePane), ("Headline", l.Headline), ("IconSafeArea", l.IconSafeArea),
+        ("VolumePane", l.VolumePane), ("Headline", l.Headline),
     ];
 }

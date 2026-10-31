@@ -91,12 +91,12 @@ internal static class Ticks
     }
 
     /// <summary>The smallest of 30, 60, 120, ... minutes whose labels are at least <paramref name="minSpacingPx"/>
-    /// apart at a 5-minute candle pitch.</summary>
-    public static int TimeIntervalMinutes(double pitchPx, double minSpacingPx)
+    /// apart at the candle pitch of <paramref name="candleMinutes"/>-minute candles.</summary>
+    public static int TimeIntervalMinutes(double pitchPx, double candleMinutes, double minSpacingPx)
     {
         foreach (var minutes in new[] { 30, 60, 120, 180, 240, 360, 720, 1440 })
         {
-            if (minutes / 5.0 * pitchPx >= minSpacingPx)
+            if (minutes / candleMinutes * pitchPx >= minSpacingPx)
             {
                 return minutes;
             }

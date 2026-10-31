@@ -4,12 +4,15 @@ namespace BitcoinWallpaper.Chart.Core.Layout;
 /// Pure: the same screen always gives the same layout.</summary>
 public static class LayoutEngine
 {
-    private const double IconSafeShare = 0.08;
-    private const double AxisRightShare = 0.97;
+    // The plot ends one label width short of 98.5 % of the screen width (D-30); the price-axis column runs from there
+    // to the screen edge, its labels and tags centred in it (owner 2026-10-31).
+    private const double AxisRightShare = 0.985;
     private const double BodyShare = 0.62;
-    private const int RightOffset = 8;
 
-    // Aspect ratio at or above which the headline goes top-right (32:9, 21:9); below it top-left at x = 10 %.
+    // The newest candle takes the last slot before the price axis: no empty gap (owner, D-30).
+    private const int RightOffset = 0;
+
+    // Aspect ratio at or above which the headline goes top-right (32:9, 21:9); below it top-left at the left margin.
     private const double WideAspect = 2.2;
 
     public static DisplayProfile ProfileFor(int widthPx, int heightPx, double dpiScale)
@@ -37,11 +40,12 @@ public static class LayoutEngine
         var tv = profile == DisplayProfile.Tv;
         var text = TextFor(h, tv);
 
-        // Horizontal: icons | plot | price axis | margin.
-        var plotX = Math.Ceiling(IconSafeShare * w);
-        var axisRight = Math.Round(AxisRightShare * w);
-        var axisWidth = Math.Ceiling(6.6 * text.AxisLabelPx); // "77,490.96" in mono plus padding
-        var plotWidth = axisRight - axisWidth - plotX;
+        // Horizontal: plot | price axis. The plot starts at the screen's left edge: nothing is reserved for desktop
+        // icons (D-20), and the oldest candle may be cut there (D-30).
+        const double plotX = 0;
+        var labelWidth = Math.Ceiling(6.6 * text.AxisLabelPx); // "77,490.96" in mono plus padding
+        var plotWidth = Math.Round(AxisRightShare * w) - labelWidth - plotX;
+        var axisWidth = w - (plotX + plotWidth);
 
         // Vertical: margin | plot | gap | volume | time axis | margin.
         var top = Math.Round(0.03 * h);
@@ -71,7 +75,6 @@ public static class LayoutEngine
             timeAxis,
             volume,
             headline,
-            new RectPx(0, 0, IconSafeShare * w, h),
             text,
             pitch,
             BodyWidth(pitch, wick),
@@ -132,8 +135,8 @@ public static class LayoutEngine
             return new RectPx(right - width, plot.Y, width, height);
         }
 
-        // Top-left, right of the icon safe area.
-        var x = Math.Round(0.10 * w);
+        // Top-left, one gap in from the plot's left edge.
+        var x = plot.X + gap;
         var fit = Math.Floor(plot.Right - gap - x);
         return new RectPx(x, plot.Y, Math.Min(Math.Ceiling(8 * text.HeadlinePricePx), fit), height);
     }

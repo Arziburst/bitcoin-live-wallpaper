@@ -46,7 +46,11 @@ public static class BinanceParser
 
     /// <summary>A raw stream payload: kline -> CandleUpdate (IsClosed = k.x), 24hrMiniTicker -> TickerUpdate;
     /// anything else (subscribe replies, other events) -> null.</summary>
-    public static MarketEvent? ParseStreamMessage(string json)
+    public static MarketEvent? ParseStreamMessage(string json) => ParseStreamMessage(json, null);
+
+    /// <summary>As <see cref="ParseStreamMessage(string)"/>; a kline whose interval ("i") is not
+    /// <paramref name="intervalCode"/> (e.g. "4h") -> null.</summary>
+    public static MarketEvent? ParseStreamMessage(string json, string? intervalCode)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -59,6 +63,11 @@ public static class BinanceParser
         {
             case "kline":
                 var k = root.GetProperty("k");
+                if (intervalCode is not null && k.GetProperty("i").GetString() != intervalCode)
+                {
+                    return null;
+                }
+
                 return new CandleUpdate(new Candle(
                     DateTimeOffset.FromUnixTimeMilliseconds(JsonValues.Int64(k.GetProperty("t"))),
                     JsonValues.Decimal(k, "o"),

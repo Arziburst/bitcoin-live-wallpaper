@@ -15,7 +15,6 @@ namespace BitcoinWallpaper.Chart.Render.D2D;
 public sealed class ChartRenderer : IDisposable
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
 
     /// <summary>D2D1_DEFAULT_FLATTENING_TOLERANCE.</summary>
     private const float DefaultFlatteningTolerance = 0.25f;
@@ -78,6 +77,7 @@ public sealed class ChartRenderer : IDisposable
         DrawAverages(target, paint, scene);
         DrawCandles(target, paint, scene);
         DrawLastPriceLine(target, paint, scene);
+        DrawDayLabels(target, paint, scene);
         target.PopAxisAlignedClip();
 
         DrawHeadline(target, paint, scene);
@@ -174,11 +174,9 @@ public sealed class ChartRenderer : IDisposable
         target.AntialiasMode = AntialiasMode.Aliased;
         var body = (float)l.CandleBodyWidthPx;
         var floor = (float)Math.Round(pane.Bottom);
-        var shifting = s.ShiftPx != 0;
-        if (shifting)
-        {
-            target.PushAxisAlignedClip(ToRect(pane), AntialiasMode.Aliased);
-        }
+
+        // The bar of the candle cut by the left edge, and of the one sliding out while shifting, end at the pane.
+        target.PushAxisAlignedClip(ToRect(pane), AntialiasMode.Aliased);
 
         for (var i = s.FirstIndex; i < candles.Count; i++)
         {
@@ -193,10 +191,7 @@ public sealed class ChartRenderer : IDisposable
             target.FillRectangle(new Rect(x, floor - height, body, height), IsUp(c) ? paint.VolumeUp : paint.VolumeDown);
         }
 
-        if (shifting)
-        {
-            target.PopAxisAlignedClip();
-        }
+        target.PopAxisAlignedClip();
     }
 
     // ---- plot content -------------------------------------------------------------------------
@@ -220,18 +215,16 @@ public sealed class ChartRenderer : IDisposable
                 EndCap = CapStyle.Round,
             },
             [0.01f, 2.6f]);
-        var labelSize = l.Text.AxisLabelPx * 0.82;
         target.AntialiasMode = AntialiasMode.PerPrimitive;
         using var gpu = Gpu(target);
-        foreach (var (price, name, above) in new[] { (hl.High, "24h high", true), (hl.Low, "24h low", false) })
+        foreach (var price in new[] { hl.High, hl.Low })
         {
             if (!s.OnScale(price))
             {
                 continue;
             }
 
-            var y = s.Scale.Y(price);
-            var yy = Snap(y) + 0.5f;
+            var yy = Snap(s.Scale.Y(price)) + 0.5f;
             if (gpu is not null)
             {
                 var before = target.Transform;
@@ -243,7 +236,30 @@ public sealed class ChartRenderer : IDisposable
             {
                 target.DrawLine(new Vector2((float)plot.X, yy), new Vector2((float)plot.Right, yy), paint.DayLine, width, dots);
             }
+        }
+    }
 
+    // The labels of the 24h lines and the edge markers, drawn over the candles, so the candles at the left edge never
+    // hide them.
+    private void DrawDayLabels(ID2D1RenderTarget target, Paint paint, Scene s)
+    {
+        if (s.DayHighLow is not { } hl)
+        {
+            return;
+        }
+
+        var l = s.Layout;
+        var plot = l.Plot;
+        var labelSize = l.Text.AxisLabelPx * 0.82;
+        target.AntialiasMode = AntialiasMode.PerPrimitive;
+        foreach (var (price, name, above) in new[] { (hl.High, "24h high", true), (hl.Low, "24h low", false) })
+        {
+            if (!s.OnScale(price))
+            {
+                continue;
+            }
+
+            var y = s.Scale.Y(price);
             var text = CachedLayout(name, ChartFonts.Inter, FontWeight.Medium, labelSize, plot.Width, TextAlignment.Leading);
             var tw = text.Metrics.Width;
             var th = text.Metrics.Height;
@@ -464,18 +480,7 @@ public sealed class ChartRenderer : IDisposable
         var y = box.Y + (0.4 * t.PairSourcePx);
 
         // 1. pair, source, interval, countdown
-        var caption = $"{s.Frame.Pair}  ·  {s.Frame.Source}  ·  5m";
-        if (s.Countdown is { } countdown)
-        {
-            caption += $"  ·  {countdown}";
-        }
-
-        if (s.Frame.IsStale)
-        {
-            caption += "  ·  delayed";
-        }
-
-        var captionText = CachedLayout(caption, ChartFonts.Inter, FontWeight.Medium, t.PairSourcePx, width, align);
+        var captionText = CachedLayout(s.Caption, ChartFonts.Inter, FontWeight.Medium, t.PairSourcePx, width, align);
         DrawWithOpacity(target, paint.Axis, opacity, b => target.DrawTextLayout(new Vector2(x, (float)y), captionText, b));
 
         y += 1.5 * t.PairSourcePx;
@@ -535,56 +540,34 @@ public sealed class ChartRenderer : IDisposable
 
     private void DrawPriceAxis(ID2D1RenderTarget target, Paint paint, Scene s)
     {
-        var l = s.Layout;
-        var axis = l.PriceAxis;
-        var size = l.Text.AxisLabelPx;
-        var pad = 0.45 * size;
-        var tagHeight = 1.55 * size;
+        var axis = s.Layout.PriceAxis;
+        var size = s.Layout.Text.AxisLabelPx;
 
-        // Tags first: the last price and the 24h high / low; tick labels give way to them.
-        var tags = new List<(double Y, string Text, ID2D1Brush Fill, ID2D1Brush Ink)>();
-        if (s.Last is { } last)
+        // Each label and tag centred in the column (Scene.AxisItems): the labels first, the tags over them.
+        target.AntialiasMode = AntialiasMode.PerPrimitive;
+        foreach (var item in s.AxisItems)
         {
-            var up = IsUp(last);
-            tags.Add((s.Scale.Y(last.Close), Price(last.Close), up ? paint.Up : paint.Down, paint.TagText));
-        }
-
-        if (s.DayHighLow is { } hl)
-        {
-            tags.Add((s.Scale.Y(hl.High), Price(hl.High), paint.DayTag, paint.Axis));
-            tags.Add((s.Scale.Y(hl.Low), Price(hl.Low), paint.DayTag, paint.Axis));
-        }
-
-        tags.RemoveAll(tag => tag.Y < axis.Y || tag.Y > axis.Bottom);
-        var lastTag = tags.Count > 0 && s.Last is not null ? tags[0] : default;
-        if (tags.Count > 1 && lastTag.Text is not null)
-        {
-            // A 24h tag that would sit under the last-price tag is left out.
-            tags.RemoveAll(tag => tag.Text != lastTag.Text && Math.Abs(tag.Y - lastTag.Y) < tagHeight && tag.Fill == paint.DayTag);
-        }
-
-        var format = s.PriceStep >= 1 ? "#,##0" : "#,##0.00";
-        foreach (var level in s.PriceLevels)
-        {
-            var y = s.Scale.Y(level);
-            if (y < axis.Y + (0.6 * size) || y > axis.Bottom - (0.6 * size) ||
-                tags.Any(tag => Math.Abs(tag.Y - y) < tagHeight * 0.95))
+            var b = item.Bounds;
+            var y = b.Y + (b.Height / 2);
+            if (item.Kind == PriceAxisItemKind.Level)
             {
+                var label = CachedLayout(item.Text, ChartFonts.Mono, FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
+                target.DrawTextLayout(
+                    new Vector2((float)(b.X + ((b.Width - label.Metrics.Width) / 2)), (float)(y - (label.Metrics.Height / 2))), label, paint.Axis);
                 continue;
             }
 
-            var text = CachedLayout(level.ToString(format, Invariant), ChartFonts.Mono, FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
-            target.DrawTextLayout(new Vector2((float)(axis.X + pad), (float)(y - (text.Metrics.Height / 2))), text, paint.Axis);
-        }
+            ID2D1Brush fill = paint.DayTag, ink = paint.Axis;
+            if (item.Kind == PriceAxisItemKind.LastPrice)
+            {
+                (fill, ink) = (s.Last is { } last && IsUp(last) ? paint.Up : paint.Down, paint.TagText);
+            }
 
-        target.AntialiasMode = AntialiasMode.PerPrimitive;
-        foreach (var tag in Enumerable.Reverse(tags))
-        {
-            var text = CachedLayout(tag.Text, ChartFonts.Mono, FontWeight.Medium, size, axis.Width, TextAlignment.Leading);
-            var top = tag.Y - (tagHeight / 2);
-            var rect = new System.Drawing.RectangleF((float)axis.X, (float)top, (float)Math.Min(axis.Width, text.Metrics.Width + (2 * pad)), (float)tagHeight);
-            target.FillRoundedRectangle(new RoundedRectangle(rect, (float)(0.16 * size), (float)(0.16 * size)), tag.Fill);
-            target.DrawTextLayout(new Vector2((float)(axis.X + pad), (float)(tag.Y - (text.Metrics.Height / 2))), text, tag.Ink);
+            var text = CachedLayout(item.Text, ChartFonts.Mono, FontWeight.Medium, size, axis.Width, TextAlignment.Leading);
+            var rect = new System.Drawing.RectangleF((float)b.X, (float)b.Y, (float)b.Width, (float)b.Height);
+            target.FillRoundedRectangle(new RoundedRectangle(rect, (float)(0.16 * size), (float)(0.16 * size)), fill);
+            target.DrawTextLayout(
+                new Vector2((float)(b.X + ((b.Width - text.Metrics.Width) / 2)), (float)(y - (text.Metrics.Height / 2))), text, ink);
         }
     }
 
@@ -592,19 +575,10 @@ public sealed class ChartRenderer : IDisposable
     {
         var axis = s.Layout.TimeAxis;
         var size = s.Layout.Text.AxisLabelPx;
-        foreach (var tick in s.TimeTicks)
+        foreach (var tick in s.TimeLabels)
         {
-            var label = tick.IsDay
-                ? tick.Local.ToString("d MMM", Invariant)
-                : tick.Local.ToString("HH:mm", Invariant);
-            var text = CachedLayout(label, ChartFonts.Mono, tick.IsDay ? FontWeight.Medium : FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
-            var w = text.Metrics.Width;
-            var x = tick.X - (w / 2);
-            if (x < axis.X || x + w > axis.Right)
-            {
-                continue;
-            }
-
+            var text = CachedLayout(tick.Text, ChartFonts.Mono, tick.IsDay ? FontWeight.Medium : FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
+            var x = tick.X - (text.Metrics.Width / 2);
             target.DrawTextLayout(
                 new Vector2((float)x, (float)(axis.Y + ((axis.Height - text.Metrics.Height) / 2))), text, tick.IsDay ? paint.Primary : paint.Axis);
         }
