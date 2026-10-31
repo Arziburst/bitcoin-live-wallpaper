@@ -4,12 +4,14 @@ namespace BitcoinWallpaper.Chart.Core.Layout;
 /// Pure: the same screen always gives the same layout.</summary>
 public static class LayoutEngine
 {
-    private const double IconSafeShare = 0.08;
-    private const double AxisRightShare = 0.97;
+    // The price axis keeps 1.5 % of the width from the right screen edge (D-30).
+    private const double AxisRightShare = 0.985;
     private const double BodyShare = 0.62;
-    private const int RightOffset = 8;
 
-    // Aspect ratio at or above which the headline goes top-right (32:9, 21:9); below it top-left at x = 10 %.
+    // Empty space between the newest candle and the price axis, as a share of the width (D-30): new candles slide in.
+    private const double RightGapShare = 0.10;
+
+    // Aspect ratio at or above which the headline goes top-right (32:9, 21:9); below it top-left at the left margin.
     private const double WideAspect = 2.2;
 
     public static DisplayProfile ProfileFor(int widthPx, int heightPx, double dpiScale)
@@ -37,8 +39,9 @@ public static class LayoutEngine
         var tv = profile == DisplayProfile.Tv;
         var text = TextFor(h, tv);
 
-        // Horizontal: icons | plot | price axis | margin.
-        var plotX = Math.Ceiling(IconSafeShare * w);
+        // Horizontal: plot | price axis | margin. The plot starts at the screen's left edge: nothing is reserved for
+        // desktop icons (D-20), and the oldest candle may be cut there (D-30).
+        const double plotX = 0;
         var axisRight = Math.Round(AxisRightShare * w);
         var axisWidth = Math.Ceiling(6.6 * text.AxisLabelPx); // "77,490.96" in mono plus padding
         var plotWidth = axisRight - axisWidth - plotX;
@@ -71,13 +74,12 @@ public static class LayoutEngine
             timeAxis,
             volume,
             headline,
-            new RectPx(0, 0, IconSafeShare * w, h),
             text,
             pitch,
             BodyWidth(pitch, wick),
             wick,
             candleCount,
-            RightOffset);
+            (int)Math.Ceiling(RightGapShare * w / pitch));
     }
 
     private static TextSizes TextFor(double h, bool tv)
@@ -132,8 +134,8 @@ public static class LayoutEngine
             return new RectPx(right - width, plot.Y, width, height);
         }
 
-        // Top-left, right of the icon safe area.
-        var x = Math.Round(0.10 * w);
+        // Top-left, one gap in from the plot's left edge.
+        var x = plot.X + gap;
         var fit = Math.Floor(plot.Right - gap - x);
         return new RectPx(x, plot.Y, Math.Min(Math.Ceiling(8 * text.HeadlinePricePx), fit), height);
     }

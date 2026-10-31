@@ -13,7 +13,6 @@ public sealed class ChartLayout
         RectPx timeAxis,
         RectPx volumePane,
         RectPx headline,
-        RectPx iconSafeArea,
         TextSizes text,
         double candlePitchPx,
         double candleBodyWidthPx,
@@ -30,7 +29,6 @@ public sealed class ChartLayout
         TimeAxis = timeAxis;
         VolumePane = volumePane;
         Headline = headline;
-        IconSafeArea = iconSafeArea;
         Text = text;
         CandlePitchPx = candlePitchPx;
         CandleBodyWidthPx = candleBodyWidthPx;
@@ -64,9 +62,6 @@ public sealed class ChartLayout
 
     /// <summary>Price, 24h change, H/L/volume row, pair and source. Lies over the plot (with a scrim).</summary>
     public RectPx Headline { get; }
-
-    /// <summary>The left 8 % of the screen, full height: desktop icons; no text here.</summary>
-    public RectPx IconSafeArea { get; }
 
     public TextSizes Text { get; }
 

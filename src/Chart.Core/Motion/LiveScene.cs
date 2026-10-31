@@ -41,7 +41,7 @@ public sealed class LiveScene
 {
     private readonly TimeProvider time;
     private readonly IFrameHost host;
-    private readonly ChartMotion motion;
+    private ChartMotion motion;
 
     private IReadOnlyList<Candle> candles = [];
     private Ticker24h? ticker;
@@ -83,6 +83,16 @@ public sealed class LiveScene
         }
 
         Changed();
+    }
+
+    /// <summary>A full reload (another candle interval): the series shown and the motion state are forgotten, so the
+    /// next snapshot is shown at once, without a tween, shift or pulse from the old series. Until then a frame has
+    /// no candles. Pause, stale and started state are kept.</summary>
+    public void Reset()
+    {
+        candles = [];
+        ticker = null;
+        motion = new ChartMotion(time);
     }
 
     public void OnFeedStale(bool isStale)
