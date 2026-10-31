@@ -15,3 +15,4 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-11** (2026-10-31) A 24h high or low outside the visible price range is shown as an edge marker on the price scale; the scale is not stretched for it.
 - **D-12** (2026-10-31) No watermark on the chart; the mockup look of PR #14 is accepted.
 - **D-15** (2026-10-31) When the display is off, the wallpaper does not update the picture.
+- **D-24** (2026-10-31) If the wallpaper process crashes, it restarts by itself - at most 3 times in 10 minutes (then stays down and logs it), and the crash reason (exception, stack) goes to the log.
