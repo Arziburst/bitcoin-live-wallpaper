@@ -7,7 +7,9 @@ public static class LayoutEngine
     // The price axis keeps 1.5 % of the width from the right screen edge (D-30).
     private const double AxisRightShare = 0.985;
     private const double BodyShare = 0.62;
-    private const int RightOffset = 8;
+
+    // The newest candle takes the last slot before the price axis: no empty gap (owner, D-30).
+    private const int RightOffset = 0;
 
     // Aspect ratio at or above which the headline goes top-right (32:9, 21:9); below it top-left at the left margin.
     private const double WideAspect = 2.2;
