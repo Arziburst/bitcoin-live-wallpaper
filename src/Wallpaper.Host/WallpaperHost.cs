@@ -1,6 +1,9 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using BitcoinWallpaper.Chart.Core.Desktop;
+using BitcoinWallpaper.Chart.Core.Motion;
+using BitcoinWallpaper.Host.Scene;
 
 namespace BitcoinWallpaper.Host;
 
@@ -8,30 +11,43 @@ namespace BitcoinWallpaper.Host;
 /// The wallpaper process: a hidden top-level message window (display, DPI, taskbar, session and power
 /// notifications, the tray icon, timers), the desktop layer and the presenter. Everything runs on the thread
 /// that calls <see cref="Run"/>; the message loop blocks, so nothing runs while nothing happens. A frame is
-/// presented only when something changed (attach, placement, device loss, a redraw request).
+/// presented only when something changed (attach, placement, device loss, a redraw request) and, for an
+/// <see cref="IAnimatedScene"/>, once per display refresh while its tween runs (D-10).
 /// </summary>
-internal sealed unsafe class WallpaperHost : IDisposable
+internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
 {
     private const string WindowClass = "BitcoinWallpaper.Host";
 
     private const uint TrayMessage = Native.WM_APP + 1;
     private const uint RedrawMessage = Native.WM_APP + 2;
     private const uint PauseMessage = Native.WM_APP + 3;
+    private const uint InvokeMessage = Native.WM_APP + 4;
 
     private const nuint WatchdogTimer = 1;
     private const nuint CheckSoonTimer = 2;
     private const nuint MemoryTimer = 3;
+    private const nuint PollTimer = 4;
+    private const nuint FramesTimer = 5;
     private const uint WatchdogMs = 2000;
     private const uint CheckSoonMs = 300;
     private const uint FirstMemoryLogMs = 60_000;
     private const uint MemoryLogMs = 10 * 60_000;
+    private const uint FramesLogMs = 60_000;
 
     /// <summary>Attach failures are logged the first time and then every this many attempts (about once a minute).</summary>
     private const int AttachFailureLogEvery = 30;
 
+    /// <summary>Re-placing a window that is not where it should be is tried this often per placement.</summary>
+    private const int MisplacedRetries = 3;
+
+    /// <summary>Presents closer together than this belong to one tween (the frame-rate statistics).</summary>
+    private static readonly TimeSpan TweenGap = TimeSpan.FromMilliseconds(100);
+
     private static WallpaperHost? _current;
 
     private readonly IWallpaperScene _scene;
+    private readonly IAnimatedScene? _animated;
+    private readonly ConcurrentQueue<Action> _posted = new();
     private readonly uint _taskbarCreatedMessage;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private nint _window;
@@ -49,10 +65,19 @@ internal sealed unsafe class WallpaperHost : IDisposable
     private string? _pendingTrigger;
     private TimeSpan _pendingSince;
     private long _presentsBefore;
+    private int _misplacedTries;
+
+    // Frame statistics since the last frames log line.
+    private long _minutePresents;
+    private long _minuteTweenIntervals;
+    private TimeSpan _minuteTweenTime;
+    private TimeSpan _minuteLongestGap;
+    private TimeSpan _lastPresentAt;
 
     public WallpaperHost(IWallpaperScene scene)
     {
         _scene = scene;
+        _animated = scene as IAnimatedScene;
         _taskbarCreatedMessage = Native.RegisterWindowMessage("TaskbarCreated");
         _current = this;
     }
@@ -72,6 +97,19 @@ internal sealed unsafe class WallpaperHost : IDisposable
         if (_window != 0)
         {
             Native.PostMessage(_window, PauseMessage, paused ? 1u : 0u, 0);
+        }
+    }
+
+    /// <summary><see cref="IFrameHost"/>: the scene's data changed; one frame is presented soon.</summary>
+    public void RequestFrame() => RequestRedraw();
+
+    /// <summary>Thread-safe: runs <paramref name="action"/> on the host thread (an event from another thread).</summary>
+    public void Post(Action action)
+    {
+        _posted.Enqueue(action);
+        if (_window != 0)
+        {
+            Native.PostMessage(_window, InvokeMessage, 0, 0);
         }
     }
 
@@ -96,17 +134,68 @@ internal sealed unsafe class WallpaperHost : IDisposable
 
         Native.SetTimer(_window, WatchdogTimer, WatchdogMs, 0);
         Native.SetTimer(_window, MemoryTimer, FirstMemoryLogMs, 0);
-        Check("start");
-
-        while (Native.GetMessage(out var msg, 0, 0, 0) > 0)
+        Native.SetTimer(_window, FramesTimer, FramesLogMs, 0);
+        if (!_posted.IsEmpty)
         {
-            Native.TranslateMessage(msg);
-            Native.DispatchMessage(msg);
+            Native.PostMessage(_window, InvokeMessage, 0, 0);
         }
 
+        if (_animated is not null)
+        {
+            // Requests made before the window existed are applied here (the scene kept them).
+            _animated.Start(this);
+            Native.SetTimer(_window, PollTimer, (uint)_animated.PollInterval.TotalMilliseconds, 0);
+        }
+
+        Check("start");
+        RunMessageLoop();
         Shutdown("exit requested");
         return 0;
     }
+
+    /// <summary>
+    /// Blocks in GetMessage while nothing moves (zero presents). While the animated scene needs frames, pumps the
+    /// waiting messages and presents one frame per display refresh: the presenter waits for the previous frame to
+    /// be shown before drawing the next.
+    /// </summary>
+    private void RunMessageLoop()
+    {
+        while (true)
+        {
+            if (WantsTweenFrame())
+            {
+                while (Native.PeekMessage(out var pending, 0, 0, 0, Native.PM_REMOVE))
+                {
+                    if (pending.message == Native.WM_QUIT)
+                    {
+                        return;
+                    }
+
+                    Native.TranslateMessage(pending);
+                    Native.DispatchMessage(pending);
+                }
+
+                if (WantsTweenFrame())
+                {
+                    _dirty = true;
+                    RenderIfDirty();
+                }
+
+                continue;
+            }
+
+            if (Native.GetMessage(out var msg, 0, 0, 0) <= 0)
+            {
+                return;
+            }
+
+            Native.TranslateMessage(msg);
+            Native.DispatchMessage(msg);
+        }
+    }
+
+    private bool WantsTweenFrame() =>
+        _animated is { NeedsFrame: true } && !_paused && !_shutDown && _placement is not null && _presenter is { IsBound: true };
 
     public void Dispose()
     {
@@ -133,6 +222,8 @@ internal sealed unsafe class WallpaperHost : IDisposable
             Native.KillTimer(_window, WatchdogTimer);
             Native.KillTimer(_window, CheckSoonTimer);
             Native.KillTimer(_window, MemoryTimer);
+            Native.KillTimer(_window, PollTimer);
+            Native.KillTimer(_window, FramesTimer);
         }
 
         Try(() => _presenter?.Unbind());
@@ -206,9 +297,24 @@ internal sealed unsafe class WallpaperHost : IDisposable
                 _presenter?.Unbind();
                 TryAttach(placement, active.Bounds, trigger);
             }
+            else if (placement == _placement && !_layer.IsAt(active.Bounds, placement, out var actual))
+            {
+                // Progman can move after the 300 ms check of a display change; the watchdog puts us back.
+                if (_misplacedTries < MisplacedRetries)
+                {
+                    _misplacedTries++;
+                    Log.Warn($"{trigger}: our window is at {actual}, expected {active.Bounds} ({placement.Width}x{placement.Height}); " +
+                             $"re-placing (try {_misplacedTries} of {MisplacedRetries})");
+                    if (_layer.Move(placement, active.Bounds))
+                    {
+                        _dirty = true;
+                    }
+                }
+            }
             else if (placement != _placement)
             {
                 Log.Info($"{trigger}: re-layout {Describe(_placement)} -> {Describe(placement)}");
+                _misplacedTries = 0;
                 if (_layer.Move(placement, active.Bounds))
                 {
                     _placement = placement;
@@ -258,6 +364,7 @@ internal sealed unsafe class WallpaperHost : IDisposable
         var waited = _pendingSince == TimeSpan.Zero ? "" : $" ({(_clock.Elapsed - _pendingSince).TotalSeconds:0.0} s after the event)";
         Log.Info($"{trigger}: attached{waited}{(_attachFailures > 0 ? $" after {_attachFailures} failed attempts" : "")}");
         _attachFailures = 0;
+        _misplacedTries = 0;
         _placement = placement;
         _dirty = true;
     }
@@ -297,6 +404,7 @@ internal sealed unsafe class WallpaperHost : IDisposable
             if (presenter.Render(_scene, _placement))
             {
                 _dirty = false;
+                CountPresent();
                 if (presenter.Presents == 1 || _pendingSince != TimeSpan.Zero)
                 {
                     var after = _pendingSince == TimeSpan.Zero ? "" : $", {(_clock.Elapsed - _pendingSince).TotalSeconds:0.0} s after the event";
@@ -348,6 +456,37 @@ internal sealed unsafe class WallpaperHost : IDisposable
         CheckSoon("shell window destroyed");
     }
 
+    private void CountPresent()
+    {
+        var now = _clock.Elapsed;
+        var gap = now - _lastPresentAt;
+        if (_minutePresents > 0 && gap < TweenGap)
+        {
+            _minuteTweenIntervals++;
+            _minuteTweenTime += gap;
+            if (gap > _minuteLongestGap)
+            {
+                _minuteLongestGap = gap;
+            }
+        }
+
+        _minutePresents++;
+        _lastPresentAt = now;
+    }
+
+    /// <summary>Once a minute: how many frames were presented, and the frame rate inside tweens (D-10 evidence).</summary>
+    private void LogFrames()
+    {
+        var tweens = _minuteTweenIntervals > 0
+            ? $"; in tweens {_minuteTweenIntervals / _minuteTweenTime.TotalSeconds:0.0} fps, longest gap {_minuteLongestGap.TotalMilliseconds:0.0} ms"
+            : "";
+        Log.Info($"frames: {_minutePresents} presents in the last minute{tweens}{(_paused ? "; paused" : "")}");
+        _minutePresents = 0;
+        _minuteTweenIntervals = 0;
+        _minuteTweenTime = TimeSpan.Zero;
+        _minuteLongestGap = TimeSpan.Zero;
+    }
+
     private void LogMemory()
     {
         using var process = Process.GetCurrentProcess();
@@ -389,6 +528,13 @@ internal sealed unsafe class WallpaperHost : IDisposable
                 _dirty = true;
                 RenderIfDirty();
                 return 0;
+            case InvokeMessage:
+                while (_posted.TryDequeue(out var action))
+                {
+                    action();
+                }
+
+                return 0;
             case PauseMessage:
                 _paused = wParam != 0;
                 Log.Info(_paused ? "paused: no Present until resumed" : "resumed");
@@ -428,6 +574,12 @@ internal sealed unsafe class WallpaperHost : IDisposable
                 var trigger = _pendingTrigger ?? "event";
                 _pendingTrigger = null;
                 Check(trigger);
+                break;
+            case PollTimer:
+                _animated?.Poll();
+                break;
+            case FramesTimer:
+                LogFrames();
                 break;
             case MemoryTimer:
                 LogMemory();

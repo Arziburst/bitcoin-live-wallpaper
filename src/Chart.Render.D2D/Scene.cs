@@ -33,6 +33,10 @@ internal sealed class Scene
         Layout = frame.Layout;
         Candles = frame.Candles;
         Last = Candles.Count > 0 ? Candles[^1] : null;
+        ShiftPx = frame.ShiftPitches * Layout.CandlePitchPx;
+
+        // While the series slides in, the candle just left of the drawn ones slides out under the plot's left edge.
+        FirstIndex = ShiftPx > 0 ? Math.Max(0, Layout.FirstDrawnIndex - 1) : Layout.FirstDrawnIndex;
         Ma20 = MovingAverage.Simple(Candles, 20);
         Ma50 = MovingAverage.Simple(Candles, 50);
         DayHighLow = frame.Ticker is { } ticker
@@ -41,7 +45,7 @@ internal sealed class Scene
 
         Scale = PriceScale.For(Layout, Candles, [Ma20, Ma50]);
         (PriceStep, PriceLevels) = Ticks.Prices(Scale, Layout.Text.AxisLabelPx * 4.5);
-        TimeTicks = TimeTicksFor(frame);
+        TimeTicks = TimeTicksFor(frame, FirstIndex, ShiftPx);
         EdgeMarkers = EdgeMarkersFor();
 
         if (Last is { } last)
@@ -58,6 +62,15 @@ internal sealed class Scene
     public IReadOnlyList<Candle> Candles { get; }
 
     public Candle? Last { get; }
+
+    /// <summary>The new-bar shift in px: every candle, average, volume bar and time tick is drawn this far right.</summary>
+    public double ShiftPx { get; }
+
+    /// <summary>The oldest candle drawn: Layout.FirstDrawnIndex, one earlier while shifting.</summary>
+    public int FirstIndex { get; }
+
+    /// <summary>The candle's centre as drawn in this frame (with the shift).</summary>
+    public double CenterX(int index) => Layout.CandleCenterX(index) + ShiftPx;
 
     public IReadOnlyList<decimal?> Ma20 { get; }
 
@@ -140,7 +153,8 @@ internal sealed class Scene
     }
 
     // A tick on every candle (and every future slot right of the newest) whose local time is a whole interval.
-    private static List<TimeTick> TimeTicksFor(ChartFrame frame)
+    // While shifting, a tick that slid off the plot is left out.
+    private static List<TimeTick> TimeTicksFor(ChartFrame frame, int first, double shiftPx)
     {
         var l = frame.Layout;
         var ticks = new List<TimeTick>();
@@ -151,14 +165,15 @@ internal sealed class Scene
 
         var minutes = D2D.Ticks.TimeIntervalMinutes(l.CandlePitchPx, 6.6 * l.Text.AxisLabelPx);
         var last = frame.Candles[^1].OpenTime;
-        for (var i = l.FirstDrawnIndex; i < frame.Candles.Count + l.RightOffsetBars; i++)
+        for (var i = first; i < frame.Candles.Count + l.RightOffsetBars; i++)
         {
             var open = i < frame.Candles.Count ? frame.Candles[i].OpenTime : last + ((i - frame.Candles.Count + 1) * Interval);
             var local = TimeZoneInfo.ConvertTime(open, frame.TimeZone);
             var minuteOfDay = (local.Hour * 60) + local.Minute;
-            if (minuteOfDay % minutes == 0)
+            var x = l.CandleCenterX(i) + shiftPx;
+            if (minuteOfDay % minutes == 0 && (shiftPx == 0 || (x >= l.Plot.X && x < l.Plot.Right)))
             {
-                ticks.Add(new TimeTick(l.CandleCenterX(i), local, minuteOfDay == 0));
+                ticks.Add(new TimeTick(x, local, minuteOfDay == 0));
             }
         }
 

@@ -250,6 +250,25 @@ internal static unsafe partial class Native
     [LibraryImport("user32.dll", EntryPoint = "GetMessageW")]
     public static partial int GetMessage(out MSG msg, nint hwnd, uint filterMin, uint filterMax);
 
+    public const uint PM_REMOVE = 0x0001;
+
+    [LibraryImport("user32.dll", EntryPoint = "PeekMessageW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PeekMessage(out MSG msg, nint hwnd, uint filterMin, uint filterMax, uint remove);
+
+    public const uint WAIT_OBJECT_0 = 0;
+
+    [LibraryImport("kernel32.dll")]
+    public static partial uint WaitForSingleObjectEx(nint handle, uint milliseconds, [MarshalAs(UnmanagedType.Bool)] bool alertable);
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool CloseHandle(nint handle);
+
+    /// <summary>Blocks until the next desktop composition (vblank); the pacing fallback.</summary>
+    [LibraryImport("dwmapi.dll")]
+    public static partial int DwmFlush();
+
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool TranslateMessage(in MSG msg);
