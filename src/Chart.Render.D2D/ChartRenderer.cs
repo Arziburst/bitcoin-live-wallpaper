@@ -28,9 +28,11 @@ public sealed class ChartRenderer : IDisposable
     private Dictionary<LayoutKey, IDWriteTextLayout> layouts = [];
     private Dictionary<LayoutKey, IDWriteTextLayout> previousLayouts = [];
 
-    // GPU path only (D-6): long dotted/dashed lines and the settled part of the averages are tessellated once and
-    // kept as geometry realizations (device-dependent) instead of 120 times a second. The headless (WIC) path
-    // draws everything directly, so the golden images are unchanged.
+    // On any target that is an ID2D1DeviceContext1 (D-6) - the swap chain's context, and on current Windows also the
+    // headless WIC target - long dotted/dashed lines and the settled part of the averages are tessellated once and
+    // kept as geometry realizations (device-dependent) instead of 120 times a second. Realized lines differ slightly
+    // in antialiasing from direct drawing: the golden images still pass within their tolerance (max delta about 100
+    // on the dotted 24h and MA lines, mean delta about 0.02). A target without DeviceContext1 draws directly.
     private ID2D1DeviceContext1? realizedOn; // held, so a new context never reuses its address
     private readonly Dictionary<(string Kind, float Length, float Width), ID2D1GeometryRealization> realizedLines = [];
     private readonly RealizedAverage[] realizedAverages = [new(), new()];
@@ -316,7 +318,7 @@ public sealed class ChartRenderer : IDisposable
         }
     }
 
-    // GPU path: everything up to the second-to-last point depends on closed candles only, so it is realized once
+    // DeviceContext1 targets: everything up to the second-to-last point depends on closed candles only, so it is realized once
     // and translated by the shift; the segment to the forming candle's value is drawn each frame (the round cap
     // joins it like the round line join would).
     private static void DrawRealizedAverage(
@@ -647,7 +649,7 @@ public sealed class ChartRenderer : IDisposable
         return layout;
     }
 
-    // The target as a GPU device context, or null (the headless path). A new context drops what was realized.
+    // The target as an ID2D1DeviceContext1, or null when it is not one. A new context drops what was realized.
     private ID2D1DeviceContext1? Gpu(ID2D1RenderTarget target)
     {
         var gpu = target.QueryInterfaceOrNull<ID2D1DeviceContext1>();
