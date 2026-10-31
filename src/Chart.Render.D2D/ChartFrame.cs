@@ -8,7 +8,7 @@ namespace BitcoinWallpaper.Chart.Render.D2D;
 /// <param name="Layout">Computed for Candles.Count candles.</param>
 /// <param name="Candles">Oldest first, one source.</param>
 /// <param name="Ticker">The 24 h ticker; null hides the change and the 24h numbers.</param>
-/// <param name="Now">For the "closes in mm:ss" countdown.</param>
+/// <param name="Now">For the "closes in mm:ss" (hh:mm:ss for an hour and longer) countdown.</param>
 /// <param name="TimeZone">For the time axis labels.</param>
 /// <param name="Pair">For the headline, e.g. "BTC/USDT".</param>
 /// <param name="Source">For the headline, e.g. "Binance".</param>
@@ -30,6 +30,10 @@ public sealed record ChartFrame(
     double Pulse = 0,
     bool PulseUp = false)
 {
+    /// <summary>The candle interval of Candles: the countdown's close time, the time axis and the caption use it.</summary>
+    public TimeSpan Interval { get; init; } = CandleInterval.FiveMinutes;
+
+    /// <param name="interval">The candle interval; null: 5 minutes.</param>
     public static ChartFrame Create(
         int widthPx,
         int heightPx,
@@ -43,9 +47,12 @@ public sealed record ChartFrame(
         bool isStale = false,
         double shiftPitches = 0,
         double pulse = 0,
-        bool pulseUp = false)
+        bool pulseUp = false,
+        TimeSpan? interval = null)
     {
         ArgumentNullException.ThrowIfNull(candles);
+        var candleInterval = interval ?? CandleInterval.FiveMinutes;
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(candleInterval, TimeSpan.Zero, nameof(interval));
         return new ChartFrame(
             LayoutEngine.Compute(widthPx, heightPx, dpiScale, candles.Count),
             candles,
@@ -57,6 +64,9 @@ public sealed record ChartFrame(
             isStale,
             shiftPitches,
             pulse,
-            pulseUp);
+            pulseUp)
+        {
+            Interval = candleInterval,
+        };
     }
 }

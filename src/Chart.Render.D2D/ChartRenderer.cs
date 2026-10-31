@@ -15,7 +15,6 @@ namespace BitcoinWallpaper.Chart.Render.D2D;
 public sealed class ChartRenderer : IDisposable
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
 
     /// <summary>D2D1_DEFAULT_FLATTENING_TOLERANCE.</summary>
     private const float DefaultFlatteningTolerance = 0.25f;
@@ -174,11 +173,9 @@ public sealed class ChartRenderer : IDisposable
         target.AntialiasMode = AntialiasMode.Aliased;
         var body = (float)l.CandleBodyWidthPx;
         var floor = (float)Math.Round(pane.Bottom);
-        var shifting = s.ShiftPx != 0;
-        if (shifting)
-        {
-            target.PushAxisAlignedClip(ToRect(pane), AntialiasMode.Aliased);
-        }
+
+        // The bar of the candle cut by the left edge, and of the one sliding out while shifting, end at the pane.
+        target.PushAxisAlignedClip(ToRect(pane), AntialiasMode.Aliased);
 
         for (var i = s.FirstIndex; i < candles.Count; i++)
         {
@@ -193,10 +190,7 @@ public sealed class ChartRenderer : IDisposable
             target.FillRectangle(new Rect(x, floor - height, body, height), IsUp(c) ? paint.VolumeUp : paint.VolumeDown);
         }
 
-        if (shifting)
-        {
-            target.PopAxisAlignedClip();
-        }
+        target.PopAxisAlignedClip();
     }
 
     // ---- plot content -------------------------------------------------------------------------
@@ -464,18 +458,7 @@ public sealed class ChartRenderer : IDisposable
         var y = box.Y + (0.4 * t.PairSourcePx);
 
         // 1. pair, source, interval, countdown
-        var caption = $"{s.Frame.Pair}  ·  {s.Frame.Source}  ·  5m";
-        if (s.Countdown is { } countdown)
-        {
-            caption += $"  ·  {countdown}";
-        }
-
-        if (s.Frame.IsStale)
-        {
-            caption += "  ·  delayed";
-        }
-
-        var captionText = CachedLayout(caption, ChartFonts.Inter, FontWeight.Medium, t.PairSourcePx, width, align);
+        var captionText = CachedLayout(s.Caption, ChartFonts.Inter, FontWeight.Medium, t.PairSourcePx, width, align);
         DrawWithOpacity(target, paint.Axis, opacity, b => target.DrawTextLayout(new Vector2(x, (float)y), captionText, b));
 
         y += 1.5 * t.PairSourcePx;
@@ -592,19 +575,10 @@ public sealed class ChartRenderer : IDisposable
     {
         var axis = s.Layout.TimeAxis;
         var size = s.Layout.Text.AxisLabelPx;
-        foreach (var tick in s.TimeTicks)
+        foreach (var tick in s.TimeLabels)
         {
-            var label = tick.IsDay
-                ? tick.Local.ToString("d MMM", Invariant)
-                : tick.Local.ToString("HH:mm", Invariant);
-            var text = CachedLayout(label, ChartFonts.Mono, tick.IsDay ? FontWeight.Medium : FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
-            var w = text.Metrics.Width;
-            var x = tick.X - (w / 2);
-            if (x < axis.X || x + w > axis.Right)
-            {
-                continue;
-            }
-
+            var text = CachedLayout(tick.Text, ChartFonts.Mono, tick.IsDay ? FontWeight.Medium : FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
+            var x = tick.X - (text.Metrics.Width / 2);
             target.DrawTextLayout(
                 new Vector2((float)x, (float)(axis.Y + ((axis.Height - text.Metrics.Height) / 2))), text, tick.IsDay ? paint.Primary : paint.Axis);
         }

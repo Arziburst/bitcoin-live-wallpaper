@@ -1,5 +1,6 @@
 using BitcoinWallpaper.Chart.Core.Candles;
 using BitcoinWallpaper.Chart.Core.Desktop;
+using BitcoinWallpaper.Chart.Core.Layout;
 using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Chart.Core.Pause;
 using BitcoinWallpaper.Chart.Render.D2D;
@@ -31,6 +32,12 @@ internal sealed class LiveChartScene : IAnimatedScene
     private MarketSource? _source;
     private FeedMode? _mode;
     private bool _firstDataLogged;
+
+    /// <summary>The candle interval shown (D-13), chosen for the screen on the first frame and on display changes;
+    /// null before the first frame.</summary>
+    private TimeSpan? _interval;
+
+    private (int Width, int Height, double Scale)? _screen;
 
     public LiveChartScene(MarketDataClient client, IPlaybackMonitor monitor, TimeProvider time)
     {
@@ -105,6 +112,7 @@ internal sealed class LiveChartScene : IAnimatedScene
             return;
         }
 
+        OnDisplay(placement);
         var frame = _live.TakeFrame();
         var kraken = _client.Candles.Source == MarketSource.Kraken;
         _renderer.Draw(context, ChartFrame.Create(
@@ -120,7 +128,8 @@ internal sealed class LiveChartScene : IAnimatedScene
             isStale: frame.HeadlineDimmed,
             shiftPitches: frame.ShiftPitches,
             pulse: frame.Pulse,
-            pulseUp: frame.PulseUp));
+            pulseUp: frame.PulseUp,
+            interval: _interval));
     }
 
     public void Dispose()
@@ -129,6 +138,31 @@ internal sealed class LiveChartScene : IAnimatedScene
         _renderer.Dispose();
         _fonts.Dispose();
         _dwrite.Dispose();
+    }
+
+    // The first frame and every display change: the screen's interval for 30 days (D-13). Another interval is a full
+    // reload: the client drops the old series at once and fetches the new one, the scene forgets what it showed, so
+    // intervals are never mixed - not in the buffer and not on screen.
+    private void OnDisplay(SurfacePlacement placement)
+    {
+        var screen = (placement.Width, placement.Height, placement.Scale);
+        if (screen == _screen)
+        {
+            return;
+        }
+
+        _screen = screen;
+        var decision = IntervalPolicy.OnDisplay(_interval, placement.Width, placement.Height, placement.Scale, IntervalPolicy.DefaultPeriod);
+        if (!decision.Reload)
+        {
+            return;
+        }
+
+        Log.Info($"candle interval: {(_interval is { } old ? CandleInterval.Code(old) : "none")} -> {CandleInterval.Code(decision.Interval)} " +
+                 $"for {placement.Width}x{placement.Height} @ {placement.Scale:0.##}; reloading");
+        _interval = decision.Interval;
+        _client.ChangeInterval(decision.Interval);
+        _live!.Reset();
     }
 
     // The monitor's timer thread: only post; LiveScene is touched on the host thread.

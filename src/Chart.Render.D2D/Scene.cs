@@ -21,10 +21,31 @@ public static class DayRangeMarkers
     public static IReadOnlyList<DayRangeMarker> For(ChartFrame frame) => new Scene(frame).EdgeMarkers;
 }
 
+/// <summary>One time-axis label as drawn: X = the label's centre (its tick) in physical px.</summary>
+public sealed record TimeAxisLabel(double X, string Text);
+
+/// <summary>What a frame shows, computed from the frame alone (like <see cref="DayRangeMarkers.For"/>).</summary>
+public static class FrameView
+{
+    /// <summary>The labels drawn on the time axis, left to right.</summary>
+    public static IReadOnlyList<TimeAxisLabel> TimeAxisLabels(ChartFrame frame) =>
+        new Scene(frame).TimeLabels.Select(t => new TimeAxisLabel(t.X, t.Text)).ToList();
+
+    /// <summary>The headline's first line as drawn, e.g. "BTC/USDT  ·  Binance  ·  4h  ·  closes in 03:12:05".</summary>
+    public static string Caption(ChartFrame frame) => new Scene(frame).Caption;
+
+    /// <summary>The 20-candle average drawn, one entry per frame candle.</summary>
+    public static IReadOnlyList<decimal?> Ma20(ChartFrame frame) => new Scene(frame).Ma20;
+
+    /// <summary>The 50-candle average drawn, one entry per frame candle.</summary>
+    public static IReadOnlyList<decimal?> Ma50(ChartFrame frame) => new Scene(frame).Ma50;
+}
+
 /// <summary>What a frame derives to, computed from the frame alone.</summary>
 internal sealed class Scene
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
+    /// <summary>From this interval on the time axis labels days and the countdown shows hours.</summary>
+    private static readonly TimeSpan LongInterval = TimeSpan.FromHours(1);
 
     public Scene(ChartFrame frame)
     {
@@ -32,11 +53,13 @@ internal sealed class Scene
         Frame = frame;
         Layout = frame.Layout;
         Candles = frame.Candles;
+        Interval = frame.Interval;
         Last = Candles.Count > 0 ? Candles[^1] : null;
         ShiftPx = frame.ShiftPitches * Layout.CandlePitchPx;
 
-        // While the series slides in, the candle just left of the drawn ones slides out under the plot's left edge.
-        FirstIndex = ShiftPx > 0 ? Math.Max(0, Layout.FirstDrawnIndex - 1) : Layout.FirstDrawnIndex;
+        // The candle just left of the drawn ones is cut by the screen's left edge (D-30); while the series slides
+        // in, it slides out there.
+        FirstIndex = Math.Max(0, Layout.FirstDrawnIndex - 1);
         Ma20 = MovingAverage.Simple(Candles, 20);
         Ma50 = MovingAverage.Simple(Candles, 50);
         DayHighLow = frame.Ticker is { } ticker
@@ -45,15 +68,33 @@ internal sealed class Scene
 
         Scale = PriceScale.For(Layout, Candles, [Ma20, Ma50]);
         (PriceStep, PriceLevels) = Ticks.Prices(Scale, Layout.Text.AxisLabelPx * 4.5);
-        TimeTicks = TimeTicksFor(frame, FirstIndex, ShiftPx);
+        TimeTicks = Interval >= LongInterval ? DayTicksFor(frame, FirstIndex, ShiftPx) : TimeTicksFor(frame, FirstIndex, ShiftPx);
+        TimeLabels = TimeTicks.Where(LabelFits).ToList();
         EdgeMarkers = EdgeMarkersFor();
 
         if (Last is { } last)
         {
-            var close = last.IsClosed ? NextBoundary(frame.Now) : last.OpenTime + Interval;
-            Countdown = CloseCountdown.Text(close, frame.Now);
+            var close = last.IsClosed ? NextBoundary(frame.Now, Interval) : last.OpenTime + Interval;
+            Countdown = Interval >= LongInterval ? LongCountdown(close, frame.Now) : CloseCountdown.Text(close, frame.Now);
         }
+
+        var caption = $"{frame.Pair}  ·  {frame.Source}  ·  {CandleInterval.Code(Interval)}";
+        if (Countdown is { } countdown)
+        {
+            caption += $"  ·  {countdown}";
+        }
+
+        Caption = frame.IsStale ? caption + "  ·  delayed" : caption;
     }
+
+    /// <summary>The candle interval of the frame.</summary>
+    public TimeSpan Interval { get; }
+
+    /// <summary>The headline's first line: pair, source, interval, countdown, "delayed" when stale.</summary>
+    public string Caption { get; }
+
+    /// <summary>The time ticks whose label fits inside the time axis; those labels are drawn.</summary>
+    public IReadOnlyList<TimeTick> TimeLabels { get; }
 
     public ChartFrame Frame { get; }
 
@@ -146,14 +187,40 @@ internal sealed class Scene
     private static bool Intersects(RectPx a, RectPx b) =>
         a.X < b.Right && b.X < a.Right && a.Y < b.Bottom && b.Y < a.Bottom;
 
-    private static DateTimeOffset NextBoundary(DateTimeOffset now)
+    private static DateTimeOffset NextBoundary(DateTimeOffset now, TimeSpan interval)
     {
-        var ticks = now.UtcTicks - (now.UtcTicks % Interval.Ticks);
-        return new DateTimeOffset(ticks, TimeSpan.Zero) + Interval;
+        var ticks = now.UtcTicks - (now.UtcTicks % interval.Ticks);
+        return new DateTimeOffset(ticks, TimeSpan.Zero) + interval;
     }
 
+    /// <summary>"closes in hh:mm:ss": rounded up to whole seconds, never negative.</summary>
+    private static string LongCountdown(DateTimeOffset closeTime, DateTimeOffset now)
+    {
+        var ticks = Math.Max(0, (closeTime - now).Ticks);
+        var seconds = (ticks + TimeSpan.TicksPerSecond - 1) / TimeSpan.TicksPerSecond;
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"closes in {seconds / 3600:00}:{seconds / 60 % 60:00}:{seconds % 60:00}");
+    }
+
+    // The mono label centred on its tick lies inside the time axis.
+    private bool LabelFits(TimeTick tick)
+    {
+        var axis = Layout.TimeAxis;
+        var half = tick.Text.Length * MonoAdvance * Layout.Text.AxisLabelPx / 2;
+        return tick.X - half >= axis.X && tick.X + half <= axis.Right;
+    }
+
+    // The open time of slot i: a candle's, or for the future slots right of the newest one, extrapolated.
+    private static DateTimeOffset SlotOpen(ChartFrame frame, int i) =>
+        i < frame.Candles.Count
+            ? frame.Candles[i].OpenTime
+            : frame.Candles[^1].OpenTime + ((i - frame.Candles.Count + 1) * frame.Interval);
+
+    // A tick that slid off the plot (while shifting, or the cut candle at the left edge) is left out.
+    private static bool OnPlot(ChartLayout l, double x) => x >= l.Plot.X && x < l.Plot.Right;
+
     // A tick on every candle (and every future slot right of the newest) whose local time is a whole interval.
-    // While shifting, a tick that slid off the plot is left out.
     private static List<TimeTick> TimeTicksFor(ChartFrame frame, int first, double shiftPx)
     {
         var l = frame.Layout;
@@ -163,17 +230,59 @@ internal sealed class Scene
             return ticks;
         }
 
-        var minutes = D2D.Ticks.TimeIntervalMinutes(l.CandlePitchPx, 6.6 * l.Text.AxisLabelPx);
-        var last = frame.Candles[^1].OpenTime;
+        var minutes = D2D.Ticks.TimeIntervalMinutes(l.CandlePitchPx, frame.Interval.TotalMinutes, 6.6 * l.Text.AxisLabelPx);
         for (var i = first; i < frame.Candles.Count + l.RightOffsetBars; i++)
         {
-            var open = i < frame.Candles.Count ? frame.Candles[i].OpenTime : last + ((i - frame.Candles.Count + 1) * Interval);
-            var local = TimeZoneInfo.ConvertTime(open, frame.TimeZone);
+            var local = TimeZoneInfo.ConvertTime(SlotOpen(frame, i), frame.TimeZone);
             var minuteOfDay = (local.Hour * 60) + local.Minute;
             var x = l.CandleCenterX(i) + shiftPx;
-            if (minuteOfDay % minutes == 0 && (shiftPx == 0 || (x >= l.Plot.X && x < l.Plot.Right)))
+            if (minuteOfDay % minutes == 0 && OnPlot(l, x))
             {
-                ticks.Add(new TimeTick(x, local, minuteOfDay == 0));
+                var day = minuteOfDay == 0;
+                ticks.Add(new TimeTick(x, local, day, local.ToString(day ? "d MMM" : "HH:mm", System.Globalization.CultureInfo.InvariantCulture)));
+            }
+        }
+
+        return ticks;
+    }
+
+    // Candles of an hour and longer: a "d MMM" tick at the local midnight of every n-th day (n = 1, 2, 3 or 7, the
+    // smallest whose labels are far enough apart; weeks start on Monday), placed on the candle time scale.
+    private static List<TimeTick> DayTicksFor(ChartFrame frame, int first, double shiftPx)
+    {
+        var l = frame.Layout;
+        var ticks = new List<TimeTick>();
+        if (frame.Candles.Count == 0)
+        {
+            return ticks;
+        }
+
+        var dayPx = TimeSpan.FromDays(1) / frame.Interval * l.CandlePitchPx;
+        var step = new[] { 1, 2, 3, 7 }.FirstOrDefault(n => n * dayPx >= 6.6 * l.Text.AxisLabelPx, 7);
+        for (var i = first; i < frame.Candles.Count + l.RightOffsetBars; i++)
+        {
+            var open = SlotOpen(frame, i);
+            var end = open + frame.Interval;
+            var date = TimeZoneInfo.ConvertTime(open, frame.TimeZone).Date;
+            for (var day = date; ; day = day.AddDays(1))
+            {
+                var midnight = new DateTimeOffset(day, frame.TimeZone.GetUtcOffset(day));
+                if (midnight >= end)
+                {
+                    break;
+                }
+
+                if (midnight < open || DateOnly.FromDateTime(day).DayNumber % step != 0)
+                {
+                    continue;
+                }
+
+                var x = l.CandleCenterX(i) - (l.CandlePitchPx / 2) + ((midnight - open) / frame.Interval * l.CandlePitchPx) + shiftPx;
+                if (OnPlot(l, x))
+                {
+                    var local = TimeZoneInfo.ConvertTime(midnight, frame.TimeZone);
+                    ticks.Add(new TimeTick(x, local, false, day.ToString("d MMM", System.Globalization.CultureInfo.InvariantCulture)));
+                }
             }
         }
 
@@ -181,7 +290,8 @@ internal sealed class Scene
     }
 }
 
-internal readonly record struct TimeTick(double X, DateTimeOffset Local, bool IsDay);
+/// <param name="IsDay">A day change of the intraday axis: drawn brighter.</param>
+internal readonly record struct TimeTick(double X, DateTimeOffset Local, bool IsDay, string Text);
 
 internal static class ChartText
 {
