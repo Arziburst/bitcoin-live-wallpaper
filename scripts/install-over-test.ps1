@@ -1,7 +1,7 @@
 # D-36 install-over check, for the CI runner only (it installs the app for the current user; never run it on a PC
 # you use). Installs -OldInstaller silently, starts the app, writes sample user files, then installs -NewInstaller
 # silently over it, and checks: the installed version is -NewVersion, the user files (settings.json, screensaver.json,
-# future.json, logsold.log, lockoriginal.jpg) are unchanged, the app log names the restore, one install folder,
+# future.json, logs\old.log, lock\original.jpg) are unchanged, the app log names the restore, one install folder,
 # and the Velopack hooks' results (Run value, Desktop shortcut, BitcoinWallpaper.scr). Every leftover process is stopped
 # at the end. Exits non-zero when any check fails.
 #
