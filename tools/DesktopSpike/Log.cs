@@ -1,16 +1,19 @@
 namespace DesktopSpike;
 
-/// <summary>Writes every line to the console and to a log file in %TEMP%.</summary>
+/// <summary>Writes every line to the console and to one log file per run in %TEMP%\DesktopSpike.</summary>
 internal static class Log
 {
     private static readonly Lock Gate = new();
     private static StreamWriter? _file;
 
-    public static string FilePath { get; } = Path.Combine(Path.GetTempPath(), "DesktopSpike.log");
+    public static string Directory { get; } = Path.Combine(Path.GetTempPath(), "DesktopSpike");
+
+    public static string FilePath { get; } = Path.Combine(Directory, $"run-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
     public static void Open()
     {
-        _file = new StreamWriter(FilePath, append: false) { AutoFlush = true };
+        System.IO.Directory.CreateDirectory(Directory);
+        _file = new StreamWriter(FilePath, append: true) { AutoFlush = true };
     }
 
     public static void Info(string message) => Write("INFO", message);

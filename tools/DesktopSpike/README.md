@@ -4,22 +4,25 @@ Proves that we can draw behind the desktop icons on Windows 11 24H2+ ("raised de
 rectangle with a slowly moving white bar on the monitor under the mouse cursor, presented through a
 DirectComposition flip-model swap chain (D3D11 + Direct2D via Vortice.Windows, MIT).
 
-Run from the repository root (PowerShell):
+Build once from the repository root (PowerShell), then run the built exe directly:
 
 ```powershell
-& "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe" run --project tools/DesktopSpike -c Release -- --seconds 20
+& "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe" build tools/DesktopSpike -c Release
+$env:DOTNET_ROOT = "$env:LOCALAPPDATA\Microsoft\dotnet"
+.\tools\DesktopSpike\bin\Release\net10.0-windows\DesktopSpike.exe --seconds 20
 ```
 
-Stop it with Ctrl+C, by closing the console, or let `--seconds N` run out. Everything is logged to the
-console and to `%TEMP%\DesktopSpike.log`.
+Stop it with Ctrl+C, by closing the console, or let `--seconds N` run out. Every run writes its own log,
+`%TEMP%\DesktopSpike\run-<yyyyMMdd-HHmmss>.log` (the path is printed first); a clean run ends with the
+line `clean exit (code 0)`.
 
 | Option | Meaning |
 |---|---|
 | `--seconds N` | stop by itself after N seconds |
-| `--layout auto\|legacy\|raised` | force the attach path instead of detecting it |
 | `--plain-child` | raised layout: plain child window instead of a `WS_EX_LAYERED` one |
 | `--dry-run` | detect and log the layout only; attaches nothing |
 | `--windowed` | draw in an ordinary window; checks the drawing path without touching the desktop |
+| `--layout auto\|legacy\|raised` | diagnostics only: force the attach path instead of detecting it. Never use `legacy` on a raised (24H2+) desktop: it can parent into an unrelated WorkerW |
 
 ## Technique
 

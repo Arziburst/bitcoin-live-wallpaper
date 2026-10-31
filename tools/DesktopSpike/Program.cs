@@ -11,13 +11,14 @@ const string UsageText = """
     Usage: DesktopSpike [--seconds N] [--layout auto|legacy|raised] [--plain-child] [--dry-run] [--windowed] [--help]
 
       --seconds N      stop by itself after N seconds (default: run until Ctrl+C or the console closes)
-      --layout L       force the attach path instead of detecting it (default: auto)
+      --layout L       diagnostics: force the attach path instead of detecting it (default: auto);
+                       never use legacy on a raised (24H2+) desktop
       --plain-child    raised layout: attach a plain child window instead of a WS_EX_LAYERED one
       --dry-run        only detect and log the desktop layout; attach nothing, change nothing
       --windowed       draw in an ordinary window instead of the desktop (checks the drawing path only)
       --help           show this text
 
-    Log: console and %TEMP%\DesktopSpike.log
+    Log: console and %TEMP%\DesktopSpike\run-<yyyyMMdd-HHmmss>.log (one file per run)
     """;
 
 double? seconds = null;
@@ -63,13 +64,32 @@ for (var i = 0; i < args.Length; i++)
 }
 
 Log.Open();
+var finalLineWritten = false;
 try
 {
-    return Run();
+    var code = Run();
+    WriteFinalLine(code);
+    return code;
+}
+catch (Exception e)
+{
+    Log.Error($"failed: {e}");
+    WriteFinalLine(1);
+    return 1;
 }
 finally
 {
     Log.Close();
+}
+
+// The last line of every log: "clean exit (code 0)" when the run ended cleanly.
+void WriteFinalLine(int code)
+{
+    if (!finalLineWritten)
+    {
+        finalLineWritten = true;
+        Log.Info(code == 0 ? "clean exit (code 0)" : $"exit with errors (code {code})");
+    }
 }
 
 int Run()
@@ -205,7 +225,10 @@ int Run()
     {
         presenter?.Dispose();
         attacher.Dispose();
-        Log.Info($"clean exit (code {exitCode}); the desktop should show the normal wallpaper again");
+        Log.Info("cleaned up; the desktop should show the normal wallpaper again");
+
+        // Written here, before releasing a console-close handler: Windows ends the process once it returns.
+        WriteFinalLine(exitCode);
         cleanedUp.Set();
     }
 }
