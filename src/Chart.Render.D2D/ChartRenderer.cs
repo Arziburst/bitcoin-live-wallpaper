@@ -12,7 +12,7 @@ namespace BitcoinWallpaper.Chart.Render.D2D;
 /// <summary>Draws one <see cref="ChartFrame"/> into any Direct2D render target (a WIC bitmap, a swap chain's
 /// device context). A pure function of the frame: no clock, timer or animation; the same frame on the same target
 /// type gives the same pixels. The caller owns BeginDraw / EndDraw. Not thread-safe: one renderer per thread.</summary>
-public sealed class ChartRenderer : IDisposable
+public sealed partial class ChartRenderer : IDisposable
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -76,6 +76,7 @@ public sealed class ChartRenderer : IDisposable
         DrawDayHighLow(target, paint, scene);
         DrawAverages(target, paint, scene);
         DrawCandles(target, paint, scene);
+        DrawLitCandles(target, scene);
         DrawLastPriceLine(target, paint, scene);
         DrawDayLabels(target, paint, scene);
         target.PopAxisAlignedClip();
@@ -83,6 +84,7 @@ public sealed class ChartRenderer : IDisposable
         DrawHeadline(target, paint, scene);
         DrawPriceAxis(target, paint, scene);
         DrawTimeAxis(target, paint, scene);
+        DrawCrosshair(target, scene);
     }
 
     public void Dispose()
