@@ -24,6 +24,7 @@ internal sealed class LiveChartScene : IAnimatedScene
     private readonly IDWriteFactory5 _dwrite;
     private readonly ChartFonts _fonts;
     private readonly ChartRenderer _renderer;
+    private readonly PauseCombiner _pause = new();
 
     private WallpaperHost? _host;
     private LiveScene? _live;
@@ -59,7 +60,7 @@ internal sealed class LiveChartScene : IAnimatedScene
         _monitor.Start();
 
         // What happened before the window existed is applied at once: the current pause state and data.
-        _live.OnPlayback(_monitor.State);
+        ApplyMonitor(_monitor.State, _monitor.LastVerdict.Reason);
         Poll();
         _live.OnHostStarted();
     }
@@ -139,7 +140,23 @@ internal sealed class LiveChartScene : IAnimatedScene
         _host?.Post(() =>
         {
             Log.Info(state == PlaybackState.Paused ? $"pause monitor: paused ({reason})" : "pause monitor: running");
-            _live?.OnPlayback(state);
+            ApplyMonitor(state, reason);
         });
+    }
+
+    /// <summary>The combined pause (the monitor's reason, else DisplayOff); Running when neither pauses.</summary>
+    public PauseVerdict Pause => _pause.Verdict;
+
+    // D-15: the display state and the monitor's verdict go through one PauseCombiner into the one pause path.
+    public void SetDisplayOn(bool displayOn)
+    {
+        _pause.SetDisplayOn(displayOn);
+        _live?.OnPlayback(_pause.Verdict.State);
+    }
+
+    private void ApplyMonitor(PlaybackState state, PauseReason reason)
+    {
+        _pause.SetMonitor(state, reason);
+        _live?.OnPlayback(_pause.Verdict.State);
     }
 }

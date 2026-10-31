@@ -68,6 +68,9 @@ public enum PauseReason
 
     /// <summary>Busy or RunningD3DFullScreen without such a window, inside NotificationGuard.UncorroboratedLimit.</summary>
     NotificationUncorroborated,
+
+    /// <summary>Windows reports the display off (D-15); see <see cref="PauseCombiner"/>.</summary>
+    DisplayOff,
 }
 
 public readonly record struct PauseVerdict(PlaybackState State, PauseReason Reason)

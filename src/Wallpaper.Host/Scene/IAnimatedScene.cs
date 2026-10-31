@@ -18,4 +18,7 @@ internal interface IAnimatedScene : IWallpaperScene, IDisposable
 
     /// <summary>Reads the sources (the market data client); a change asks the host for a frame.</summary>
     void Poll();
+
+    /// <summary>Windows reported the display on (dimmed counts as on) or off (D-15); off pauses like the pause monitor.</summary>
+    void SetDisplayOn(bool displayOn);
 }
