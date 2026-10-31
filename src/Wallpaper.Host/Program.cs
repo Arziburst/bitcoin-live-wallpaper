@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using BitcoinWallpaper.Host.Install;
 using BitcoinWallpaper.Host.Playback;
 using BitcoinWallpaper.Host.Scene;
@@ -110,7 +112,8 @@ internal static class Program
 
             using var monitor = new PlaybackMonitor();
             using var scene = new LiveChartScene(client, monitor, TimeProvider.System);
-            var menu = new TrayMenuModel(toggle, autostart, () => Native.PostQuitMessage(0));
+            var menu = new TrayMenuModel(toggle, autostart, () => Native.PostQuitMessage(0),
+                openFolder: OpenFolder, logsDirectory: Log.Directory, version: AppVersion());
             using (var host = new WallpaperHost(scene, menu, channel))
             {
                 control.Bind(host, feed);
@@ -152,6 +155,41 @@ internal static class Program
             Log.Warn($"Velopack locator: {e.Message}");
             return false;
         }
+    }
+
+    /// <summary>Open logs (D-26): Explorer on the folder; a failure is logged, a tray click never ends the host.</summary>
+    private static void OpenFolder(string path)
+    {
+        try
+        {
+            var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+            start.ArgumentList.Add(path);
+            Process.Start(start)?.Dispose();
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"tray: Explorer could not open {path}: {e.Message}");
+        }
+    }
+
+    /// <summary>The installed Velopack version, else the assembly's informational version without its +commit.</summary>
+    private static string? AppVersion()
+    {
+        try
+        {
+            if (IsInstalledBySetup() && VelopackLocator.Current.CurrentlyInstalledVersion is { } installed)
+            {
+                return installed.ToString();
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"Velopack version: {e.Message}");
+        }
+
+        var informational = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        return informational?.Split('+')[0];
     }
 
     private static string WindowsVersion()

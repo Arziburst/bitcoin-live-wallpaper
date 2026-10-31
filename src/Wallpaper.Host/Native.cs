@@ -83,6 +83,7 @@ internal static unsafe partial class Native
     public const uint RDW_UPDATENOW = 0x0100;
 
     public const uint NIM_ADD = 0x0;
+    public const uint NIM_MODIFY = 0x1;
     public const uint NIM_DELETE = 0x2;
     public const uint NIM_SETVERSION = 0x4;
     public const uint NIF_MESSAGE = 0x1;

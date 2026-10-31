@@ -16,3 +16,4 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-12** (2026-10-31) No watermark on the chart; the mockup look of PR #14 is accepted.
 - **D-15** (2026-10-31) When the display is off, the wallpaper does not update the picture.
 - **D-24** (2026-10-31) If the wallpaper process crashes, it restarts by itself - at most 3 times in 10 minutes (then stays down and logs it), and the crash reason (exception, stack) goes to the log.
+- **D-26** (2026-10-31) The tray tooltip shows the state - e.g. "Live · Binance · 77 182" / "offline since 14:20" / "Paused (fullscreen)" / "Off"; tray items "Open logs" (opens %LOCALAPPDATA%\BitcoinWallpaper\logs) and "Version x.y.z".

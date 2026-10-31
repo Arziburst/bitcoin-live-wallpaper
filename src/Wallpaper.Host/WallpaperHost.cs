@@ -1,11 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using BitcoinWallpaper.Chart.Core.Candles;
 using BitcoinWallpaper.Chart.Core.Desktop;
 using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Chart.Core.Pause;
 using BitcoinWallpaper.Host.Scene;
 using BitcoinWallpaper.Host.Settings;
+using BitcoinWallpaper.Market.Data;
 
 namespace BitcoinWallpaper.Host;
 
@@ -43,6 +45,9 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
 
     /// <summary>Presents closer together than this belong to one tween (the frame-rate statistics).</summary>
     private static readonly TimeSpan TweenGap = TimeSpan.FromMilliseconds(100);
+
+    private static readonly TrayStatus OffStatus =
+        new(WallpaperState.Off, PauseReason.None, FeedState.Connecting, MarketSource.Binance, null, null);
 
     private static WallpaperHost? _current;
 
@@ -156,6 +161,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         else
         {
             Log.Info("the wallpaper is off: only the tray icon runs until it is turned on");
+            UpdateTip();
         }
 
         RunMessageLoop();
@@ -219,6 +225,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         Try(() => _layer?.Detach("turned off"));
         _placement = null;
         _dirty = false;
+        UpdateTip();
         LogMemory();
     }
 
@@ -242,7 +249,27 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             Native.SetTimer(_window, PollTimer, (uint)_animated.PollInterval.TotalMilliseconds, 0);
         }
 
+        UpdateTip();
         Check(trigger);
+    }
+
+    /// <summary>
+    /// D-26: the tooltip from the scene's last poll, or "Off"; the tray sends it only when the text changed. Off adds
+    /// no timer: it is set once here when turned off.
+    /// </summary>
+    private void UpdateTip()
+    {
+        if (_tray is null)
+        {
+            return;
+        }
+
+        var text = !_enabled
+            ? TrayStatusText.Build(OffStatus, TimeZoneInfo.Local)
+            : _animated is not null
+                ? TrayStatusText.Build(_animated.TrayStatus, TimeZoneInfo.Local)
+                : TrayStatusText.Title;
+        _tray.SetTip(text);
     }
 
     /// <summary>
@@ -682,6 +709,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 break;
             case PollTimer:
                 _animated?.Poll();
+                UpdateTip();
                 break;
             case FramesTimer:
                 LogFrames();

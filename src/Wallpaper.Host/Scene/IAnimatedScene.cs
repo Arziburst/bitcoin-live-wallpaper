@@ -1,3 +1,5 @@
+using BitcoinWallpaper.Host.Settings;
+
 namespace BitcoinWallpaper.Host.Scene;
 
 /// <summary>
@@ -27,4 +29,7 @@ internal interface IAnimatedScene : IWallpaperScene, IDisposable
 
     /// <summary>Turned on again after <see cref="Suspend"/>: the background work runs again.</summary>
     void Resume();
+
+    /// <summary>What the tray tooltip shows while the wallpaper is on (D-26), as of the last <see cref="Poll"/>.</summary>
+    TrayStatus TrayStatus { get; }
 }

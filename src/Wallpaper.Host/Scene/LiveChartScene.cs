@@ -4,6 +4,7 @@ using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Chart.Core.Pause;
 using BitcoinWallpaper.Chart.Render.D2D;
 using BitcoinWallpaper.Host.Playback;
+using BitcoinWallpaper.Host.Settings;
 using BitcoinWallpaper.Market.Data;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
@@ -32,6 +33,7 @@ internal sealed class LiveChartScene : IAnimatedScene
     private MarketSource? _source;
     private FeedMode? _mode;
     private bool _firstDataLogged;
+    private DateTimeOffset? _lastLiveAt;
 
     public LiveChartScene(MarketDataClient client, IPlaybackMonitor monitor, TimeProvider time)
     {
@@ -95,7 +97,25 @@ internal sealed class LiveChartScene : IAnimatedScene
 
         _live.OnData(candles, _client.Ticker);
         _live.OnFeedStale(state == FeedState.Stale);
+        NoteLive(state);
     }
+
+    // D-26: "offline since HH:mm" is the last poll that saw the feed live (Market.Data keeps no such time).
+    private void NoteLive(FeedState state)
+    {
+        if (state == FeedState.Live)
+        {
+            _lastLiveAt = _time.GetUtcNow();
+        }
+    }
+
+    public TrayStatus TrayStatus => new(
+        WallpaperState.On,
+        _pause.Verdict.State == PlaybackState.Paused ? _pause.Verdict.Reason : PauseReason.None,
+        _feedState ?? FeedState.Connecting,
+        _source ?? _client.Source,
+        _client.Ticker?.Last,
+        _lastLiveAt);
 
     public void Draw(ID2D1DeviceContext context, SurfacePlacement placement)
     {
