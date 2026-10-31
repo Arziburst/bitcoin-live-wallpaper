@@ -34,14 +34,15 @@
 //                                                TimeSpan period);
 //   }
 //
-// Expected intervals at 30 days, with the D-20 full-width layout (plot from the left margin, <= 1 % of W, to the
-// price axis; pitch and right offset of 8 bars unchanged):
-//   5120x1440 @1.75  pitch 16, ~297 slots  -> 4h (180 + 8 <= 297; 2h: 360 + 8 does not fit)
-//   3840x2160 @1.0   TV, pitch 24, ~141    -> 6h (120 + 8 <= 141; 4h: 188 does not fit)
-//   3840x2160 @1.5   desk, pitch 24, ~144  -> 6h
-//   3440x1440 @1.0   pitch 16, ~197        -> 4h (188 <= 197; with the old 8 % icon area: 181 slots -> 6h)
-//   1920x1080 @1.0   pitch 15, ~113        -> 8h (90 + 8; 6h: 128 does not fit)
-//   1080x1920 @1.0   pitch 21, ~39         -> 1d (30 + 8 <= 39)
+// Expected intervals at 30 days, with the D-30 layout (plot from x = 0 to the price axis, axis right edge at
+// 98.5 % +- 0.5 % of W, right offset ceil(10 % W / pitch) bars; pitch unchanged):
+//   5120x1440 @1.75  pitch 16, ~305 slots, offset 32  -> 4h (180 + 32 <= 305; 2h: 360 + 32 does not fit)
+//   3840x2160 @1.0   TV, pitch 24, ~145, offset 16    -> 6h (120 + 16 <= 145; 4h: 196 does not fit)
+//   3840x2160 @1.5   desk, pitch 24, ~147, offset 16  -> 6h
+//   1920x1080 @1.0   pitch 15, ~116, offset 13        -> 8h (90 + 13; 6h: 133 does not fit)
+//   1080x1920 @1.0   pitch 21, ~40, offset 6          -> 1d (30 + 6 <= 40)
+//   3440x1440 @1.0   pitch 16, ~200-202, offset 22    -> 4h needs exactly 202: 4h or 6h depending on where in the
+//                    98.5 % +- 0.5 % the axis ends, so it is checked only by the general rule, not pinned (D-30).
 
 using BitcoinWallpaper.Chart.Core.Layout;
 
@@ -162,9 +163,10 @@ public class IntervalPolicyTests
         Assert.Equal(0, layout.FirstDrawnIndex);
     }
 
+    // D-30: the 3440x1440 -> 4h row is removed (borderline under D-30, see the header); the general rule still
+    // covers that screen in Per_screen_the_rule_is_applied_to_the_layout_slots.
     [Theory]
     [InlineData(3840, 2160, 1.5, 6)]
-    [InlineData(3440, 1440, 1.0, 4)]
     [InlineData(1920, 1080, 1.0, 8)]
     [InlineData(1080, 1920, 1.0, 24)]
     public void Other_screens_get_a_sensible_interval(int w, int h, double s, double hours)

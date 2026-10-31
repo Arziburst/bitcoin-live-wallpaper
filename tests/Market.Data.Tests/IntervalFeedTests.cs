@@ -36,7 +36,7 @@
 //                 polls (REST fallback) .../klines?...&interval=<code>&limit=2.
 //   Kraken        serves at most the newest 720 rows: 4h (native 240) -> 720 candles (120 days, fills any slots);
 //                 6h (from 60) -> 720 hours -> 120 6h candles (119 when the oldest bucket is partial), i.e. 30
-//                 days: fewer than the TV's ~133 drawable slots, so on Kraken the TV chart does not quite fill.
+//                 days: fewer than the TV's ~129 drawable slots (D-30), so on Kraken the TV chart does not quite fill.
 //   Binance WS    SUBSCRIBE params "btcusdt@kline_<code>" and "btcusdt@miniTicker".
 //   Kraken REST   .../0/public/OHLC?pair=XBTUSD&interval=<m> (also with &since= for polls), Kraken WS v2
 //                 subscribe {"channel":"ohlc", ..., "interval": <m>}, where m is a Kraken interval (1, 5, 15, 30,
@@ -173,8 +173,8 @@ public class IntervalFeedTests
 
     public static TheoryData<int, int, double> Screens => new()
     {
-        { 5120, 1440, 1.75 }, // owner's desk: 4h, ~297 slots (D-29: ~48 days)
-        { 3840, 2160, 1.0 },  // owner's TV: 6h, ~141 slots
+        { 5120, 1440, 1.75 }, // owner's desk: 4h, ~305 slots (D-29/D-30: ~273 drawn, ~45 days)
+        { 3840, 2160, 1.0 },  // owner's TV: 6h, ~145 slots
         { 3840, 2160, 1.5 },
         { 3440, 1440, 1.0 },
         { 2560, 1440, 1.0 },

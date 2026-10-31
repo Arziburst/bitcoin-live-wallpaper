@@ -50,10 +50,12 @@ public class RendererTests(RendererFixture fx)
 
     // D-20 (#18): replaces "Nothing_but_the_background_is_drawn_in_the_icon_safe_area". Nothing is reserved for
     // icons: the chart is drawn in the left 8 % that used to be bare; only the margin left of the plot stays bare.
+    // D-30 (#18, owner 2026-10-31): was "..._reaches_the_left_margin_..." with Plot.X <= 1 % W; the plot now starts at
+    // the left screen edge (no margin, the oldest candle may be cut at x = 0).
     [Theory]
     [InlineData(Desk)]
     [InlineData(Tv)]
-    public void The_chart_reaches_the_left_margin_nothing_is_reserved_for_icons(string fileName)
+    public void The_chart_reaches_the_left_screen_edge_nothing_is_reserved_for_icons(string fileName)
     {
         var frame = fx.Frame(fileName);
         var full = fx.Renderer.Render(frame);
@@ -62,7 +64,7 @@ public class RendererTests(RendererFixture fx)
 
         var plot = frame.Layout.Plot;
         var w = frame.Layout.WidthPx;
-        Assert.True(plot.X <= 0.01 * w, $"plot starts at {plot.X}, expected the left margin (<= {0.01 * w})");
+        Assert.True(Math.Abs(plot.X) <= 0.5, $"plot starts at {plot.X}, expected the left screen edge (0)");
 
         var formerSafeArea = Math.Floor(0.08 * w);
         var drawn = Differing(full, empty, (x, y) => x < formerSafeArea && y >= plot.Y && y < plot.Bottom);

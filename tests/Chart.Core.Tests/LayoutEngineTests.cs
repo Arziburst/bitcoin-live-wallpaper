@@ -31,7 +31,8 @@
 //       double WickWidthPx;        // 1 desk, 2 TV
 //       int CandleCount;           // the candleCount passed to Compute
 //       int CandleSlots;           // floor(Plot.Width / CandlePitchPx)
-//       int RightOffsetBars;       // ~8 empty slots right of the newest candle
+//       int RightOffsetBars;       // D-30: ceil(0.10 * WidthPx / CandlePitchPx) empty slots right of the newest candle
+//                                  // (was ~8); Plot.X == 0 and PriceAxis.Right at 98.5 % +- 0.5 % of WidthPx (D-30)
 //       int DrawnCandleCount;      // min(CandleCount, CandleSlots - RightOffsetBars)
 //       int FirstDrawnIndex;       // CandleCount - DrawnCandleCount (index 0 = oldest candle)
 //       double CandleCenterX(int index);
@@ -136,13 +137,13 @@ public class LayoutEngineTests
 
     // D-20 (#18): replaces "Icon_safe_area_is_the_left_8_percent_full_height" and
     // "Nothing_but_the_chart_body_enters_the_icon_safe_area": there is no icon safe area any more.
+    // D-30 (#18, owner 2026-10-31): was "..._at_the_left_margin_..." with -0.5 <= Plot.X <= 1 % W; now no left margin.
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Plot_starts_at_the_left_margin_nothing_is_reserved_for_icons(int w, int h, double s)
+    public void Plot_starts_at_the_left_screen_edge_nothing_is_reserved_for_icons(int w, int h, double s)
     {
         var l = Layout(w, h, s);
-        Assert.True(l.Plot.X >= -0.5 && l.Plot.X <= 0.01 * w,
-            $"plot starts at {l.Plot.X}, expected the left margin (<= 1 % of {w} = {0.01 * w})");
+        Assert.True(Math.Abs(l.Plot.X) <= 0.5, $"plot starts at {l.Plot.X}, expected the left screen edge (0)");
         Assert.True(Math.Abs(l.VolumePane.X - l.Plot.X) <= 1, $"volume pane {l.VolumePane} does not start with the plot {l.Plot}");
         Assert.True(Math.Abs(l.TimeAxis.X - l.Plot.X) <= 1, $"time axis {l.TimeAxis} does not start with the plot {l.Plot}");
     }
@@ -182,6 +183,15 @@ public class LayoutEngineTests
             $"price axis width {l.PriceAxis.Width} too narrow for {l.Text.AxisLabelPx} px labels");
     }
 
+    // D-30 (#18, owner 2026-10-31), new: the price axis keeps ~1.5 % of the width from the right screen edge.
+    [Theory]
+    [MemberData(nameof(Screens))]
+    public void Price_axis_ends_about_1_5_percent_from_the_right_screen_edge(int w, int h, double s)
+    {
+        var l = Layout(w, h, s);
+        Assert.InRange(Right(l.PriceAxis), 0.98 * w, 0.99 * w);
+    }
+
     [Theory]
     [MemberData(nameof(Screens))]
     public void Volume_pane_is_under_the_plot_and_time_axis_under_the_volume(int w, int h, double s)
@@ -210,13 +220,14 @@ public class LayoutEngineTests
     }
 
     [Fact]
-    public void Ultrawide_32_9_chart_spans_the_left_margin_to_97_percent_with_headline_top_right()
+    public void Ultrawide_32_9_chart_spans_the_left_edge_to_98_5_percent_with_headline_top_right()
     {
         const int w = 5120, h = 1440;
         var l = Layout(w, h, 1.75);
-        // D-20 (#18): was "plot starts at ~8 % (±0.5 %)".
-        Assert.True(l.Plot.X >= -0.5 && l.Plot.X <= 0.01 * w, $"plot starts at {l.Plot.X}, expected the left margin (<= {0.01 * w})");
-        Assert.InRange(Right(l.PriceAxis), 0.96 * w, 0.98 * w);
+        // D-20 (#18): was "plot starts at ~8 % (±0.5 %)"; D-30: was "-0.5 <= Plot.X <= 1 % W", now the left edge.
+        Assert.True(Math.Abs(l.Plot.X) <= 0.5, $"plot starts at {l.Plot.X}, expected the left screen edge (0)");
+        // D-30: was InRange(PriceAxis.Right, 96 % W, 98 % W); now 98.5 % ± 0.5 %.
+        Assert.InRange(Right(l.PriceAxis), 0.98 * w, 0.99 * w);
         Assert.True(l.Headline.X >= w / 2.0, $"headline {l.Headline} not on the right");
         Assert.True(l.Headline.Y <= 0.06 * h, $"headline {l.Headline} not at the top");
         var toAxis = l.PriceAxis.X - Right(l.Headline);
@@ -361,11 +372,17 @@ public class LayoutEngineTests
         Assert.Equal((int)Math.Floor(l.Plot.Width / l.CandlePitchPx + 1e-9), l.CandleSlots);
     }
 
+    // D-30 (#18, owner 2026-10-31): replaces "Right_offset_is_about_8_bars" (InRange(RightOffsetBars, 6, 10)):
+    // about 10 % of the screen width stays empty between the newest candle and the price axis.
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Right_offset_is_about_8_bars(int w, int h, double s)
+    public void Right_offset_is_10_percent_of_the_screen_width(int w, int h, double s)
     {
-        Assert.InRange(Layout(w, h, s).RightOffsetBars, 6, 10);
+        var l = Layout(w, h, s);
+        Assert.Equal((int)Math.Ceiling(0.10 * w / l.CandlePitchPx), l.RightOffsetBars);
+        var emptyPx = l.RightOffsetBars * l.CandlePitchPx;
+        Assert.True(emptyPx >= 0.10 * w && emptyPx < (0.10 * w) + l.CandlePitchPx,
+            $"{emptyPx} px empty right of the newest candle, expected 10 % of {w} (+ under one pitch)");
     }
 
     [Theory]
