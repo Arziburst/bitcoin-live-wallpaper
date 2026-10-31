@@ -1,0 +1,14 @@
+* text=auto
+
+*.cs      text diff=csharp
+*.csproj  text
+*.props   text
+*.sln     text eol=crlf
+*.md      text
+*.yml     text
+*.json    text
+
+*.png     binary
+*.ico     binary
+
+docs/decisions.md merge=union
