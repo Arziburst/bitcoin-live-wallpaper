@@ -35,13 +35,13 @@
 //   }
 //
 // Expected intervals at 30 days, with the D-30 layout as corrected by the owner (plot from x = 0 to the price
-// axis, axis right edge at 98.5 % +- 0.5 % of W, right offset ~8 bars; pitch unchanged):
-//   5120x1440 @1.75  pitch 16, ~305 slots  -> 4h (180 + 8 <= 305; 2h: 360 + 8 does not fit)
-//   3840x2160 @1.0   TV, pitch 24, ~145    -> 6h (120 + 8 <= 145; 4h: 188 does not fit)
+// axis, axis right edge at 98.5 % +- 0.5 % of W, right offset 0 bars (owner 2026-10-31); pitch unchanged):
+//   5120x1440 @1.75  pitch 16, ~305 slots  -> 4h (180 <= 305; 2h: 360 does not fit); ~305 drawn = ~50.8 days
+//   3840x2160 @1.0   TV, pitch 24, ~145    -> 6h (120 <= 145; 4h: 180 does not fit); ~145 drawn = ~36 days
 //   3840x2160 @1.5   desk, pitch 24, ~147  -> 6h
-//   3440x1440 @1.0   pitch 16, ~200-202    -> 4h (188 <= 200)
-//   1920x1080 @1.0   pitch 15, ~116        -> 8h (90 + 8; 6h: 128 does not fit)
-//   1080x1920 @1.0   pitch 21, ~40         -> 1d (30 + 8 <= 40)
+//   3440x1440 @1.0   pitch 16, ~200-202    -> 4h (180 <= 200)
+//   1920x1080 @1.0   pitch 15, ~116        -> 8h (90; 6h: 120 does not fit)
+//   1080x1920 @1.0   pitch 21, ~40         -> 1d (30 <= 40; 12h: 60 does not fit)
 
 using BitcoinWallpaper.Chart.Core.Layout;
 

@@ -47,7 +47,7 @@
 // - The caption names the frame's interval, never "5m" for a 4h frame.
 // - D-29 (owner 2026-10-31): the interval stays the 30-day one, but the chart fills every drawable slot with the
 //   history it has: drawn = min(candles, CandleSlots - RightOffsetBars), the oldest drawn candle at the plot's
-//   left edge (D-30 desk: ~297 drawn 4h candles, ~49 days); with less history (Kraken 6h: 120) all of it is drawn, anchored right.
+//   left edge (right offset 0: desk ~305 drawn 4h candles, ~50.8 days; TV ~145 6h, ~36 days); with less history (Kraken 6h: 120) all of it is drawn, anchored right.
 
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -176,6 +176,52 @@ public class LongIntervalRenderTests(RendererFixture fx)
         Assert.Equal(0, l.FirstDrawnIndex);
         var expected = l.Plot.Right - ((l.RightOffsetBars + 0.5) * l.CandlePitchPx);
         Assert.True(Math.Abs(l.CandleCenterX(119) - expected) <= 1, $"newest candle at {l.CandleCenterX(119)}, expected {expected}");
+    }
+
+    // ---- owner 2026-10-31: the candles run up to the price axis ----------------------------------
+
+    [Theory]
+    [MemberData(nameof(OwnerScreens))]
+    public void The_newest_candle_runs_up_to_the_price_axis(int w, int h, double s, double hours, int count)
+    {
+        var frame = ThirtyDays(w, h, s, hours, count, TimeZoneInfo.Utc);
+        var l = frame.Layout;
+        var bodyRight = l.CandleCenterX(frame.Candles.Count - 1) + (l.CandleBodyWidthPx / 2);
+        var gap = l.PriceAxis.X - bodyRight;
+        Assert.True(gap >= 0 && gap <= 0.5 * l.CandlePitchPx,
+            $"{gap:0.#} px between the newest candle's body (right edge {bodyRight:0.#}) and the price axis at " +
+            $"{l.PriceAxis.X:0.#}; expected 0 .. half a pitch ({0.5 * l.CandlePitchPx:0.#} px)");
+    }
+
+    // Guard for the new-bar shift (D-10) with no right offset: the series slides in from up to one pitch right of
+    // its place, so it must be clipped to the plot - no candle, volume or average pixel right of the plot (the
+    // price-axis column and the margin beyond it, full height).
+    [Theory]
+    [InlineData(5120, 1440, 1.75, 4, 0.25)]
+    [InlineData(5120, 1440, 1.75, 4, 1.0)]
+    [InlineData(3840, 2160, 1.0, 6, 0.5)]
+    [InlineData(3840, 2160, 1.0, 6, 1.0)]
+    public void A_shifting_series_is_clipped_to_the_plot_nothing_enters_the_price_axis_column(int w, int h, double s, double hours, double shift)
+    {
+        var interval = TimeSpan.FromHours(hours);
+        var candles = Series(interval, NewestOpen, 1000);
+        var still = ChartFrame.Create(w, h, s, candles, TickerFor(candles), NewestOpen.AddMinutes(47), TimeZoneInfo.Utc, interval: interval);
+        var shifted = still with { ShiftPitches = shift };
+
+        var a = fx.Renderer.Render(still);
+        var b = fx.Renderer.Render(shifted);
+        Assert.True(ImageDiff.Compare(a, b).MaxDelta > 0, "the shift did not move the series");
+
+        var right = (int)Math.Ceiling(still.Layout.Plot.Right);
+        for (var y = 0; y < a.Height; y++)
+        {
+            for (var x = right; x < a.Width; x++)
+            {
+                var i = ((y * a.Width) + x) * 4;
+                Assert.True(a.Pixels[i] == b.Pixels[i] && a.Pixels[i + 1] == b.Pixels[i + 1] && a.Pixels[i + 2] == b.Pixels[i + 2],
+                    $"pixel ({x}, {y}) right of the plot (x >= {right}) changed with a {shift} pitch shift: the series is not clipped to the plot");
+            }
+        }
     }
 
     // ---- time axis: days ------------------------------------------------------------------------

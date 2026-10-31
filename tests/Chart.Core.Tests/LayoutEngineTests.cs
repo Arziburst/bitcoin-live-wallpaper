@@ -31,8 +31,8 @@
 //       double WickWidthPx;        // 1 desk, 2 TV
 //       int CandleCount;           // the candleCount passed to Compute
 //       int CandleSlots;           // floor(Plot.Width / CandlePitchPx)
-//       int RightOffsetBars;       // ~8 empty slots right of the newest candle (D-30 as corrected by the owner:
-//                                  // no 10 % gap); Plot.X == 0 and PriceAxis.Right at 98.5 % +- 0.5 % of WidthPx
+//       int RightOffsetBars;       // 0 (owner 2026-10-31): no empty slot right of the newest candle;
+//                                  // Plot.X == 0 and PriceAxis.Right at 98.5 % +- 0.5 % of WidthPx (D-30)
 //       int DrawnCandleCount;      // min(CandleCount, CandleSlots - RightOffsetBars)
 //       int FirstDrawnIndex;       // CandleCount - DrawnCandleCount (index 0 = oldest candle)
 //       double CandleCenterX(int index);
@@ -372,13 +372,14 @@ public class LayoutEngineTests
         Assert.Equal((int)Math.Floor(l.Plot.Width / l.CandlePitchPx + 1e-9), l.CandleSlots);
     }
 
-    // D-30 as corrected by the owner (2026-10-31): the 10 % gap before the price axis was not wanted; the right
-    // offset is about 8 bars again (this test is the original one, restored).
+    // Owner, 2026-10-31 (after the corrected mockup): the candles and averages run up to the price axis with no
+    // empty gap - the newest candle takes the last slot before the axis. Replaces "Right_offset_is_about_8_bars"
+    // (InRange(RightOffsetBars, 6, 10)).
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Right_offset_is_about_8_bars(int w, int h, double s)
+    public void Right_offset_is_zero_the_newest_candle_takes_the_last_slot(int w, int h, double s)
     {
-        Assert.InRange(Layout(w, h, s).RightOffsetBars, 6, 10);
+        Assert.Equal(0, Layout(w, h, s).RightOffsetBars);
     }
 
     [Theory]
