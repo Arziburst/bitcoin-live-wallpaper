@@ -13,11 +13,16 @@ namespace BitcoinWallpaper.Host;
 /// <summary>
 /// D3D11 + Direct2D devices and, per attached window, a flip-model composition swap chain shown through a
 /// DirectComposition visual (the path the spike proved on the raised desktop). Draws only when asked:
-/// every <see cref="Render"/> is one Present.
+/// every <see cref="Render"/> is one Present. Frames are paced by the swap chain's frame latency waitable object
+/// (at most one frame queued): <see cref="Render"/> first waits until the previous frame is on screen, so a run of
+/// renders gives one frame per display refresh (D-10). Without the waitable object, DwmFlush paces instead.
 /// </summary>
 internal sealed class DCompPresenter : IDisposable
 {
     private const uint BufferCount = 2;
+
+    /// <summary>Longer than any refresh: a missed signal (device trouble) never hangs the host.</summary>
+    private const uint FrameWaitMs = 250;
 
     private readonly ID3D11Device _device;
     private readonly IDXGIDevice _dxgiDevice;
@@ -31,6 +36,9 @@ internal sealed class DCompPresenter : IDisposable
     private IDCompositionTarget? _target;
     private IDCompositionVisual? _visual;
     private ID2D1Bitmap1? _backBuffer;
+    private SwapChainFlags _flags;
+    private nint _frameWait;
+    private bool _frameWaitTimeoutLogged;
 
     public DCompPresenter()
     {
@@ -79,8 +87,28 @@ internal sealed class DCompPresenter : IDisposable
             Scaling = Scaling.Stretch,
             SwapEffect = SwapEffect.FlipSequential,
             AlphaMode = Vortice.DXGI.AlphaMode.Ignore,
+            Flags = SwapChainFlags.FrameLatencyWaitableObject,
         };
-        _swapChain = _factory.CreateSwapChainForComposition(_device, description);
+        try
+        {
+            _swapChain = _factory.CreateSwapChainForComposition(_device, description);
+            _flags = description.Flags;
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"swap chain with a frame latency waitable object failed ({e.Message}); pacing with DwmFlush");
+            description.Flags = SwapChainFlags.None;
+            _swapChain = _factory.CreateSwapChainForComposition(_device, description);
+            _flags = SwapChainFlags.None;
+        }
+
+        if (_flags.HasFlag(SwapChainFlags.FrameLatencyWaitableObject))
+        {
+            using var chain2 = _swapChain.QueryInterface<IDXGISwapChain2>();
+            chain2.MaximumFrameLatency = 1;
+            _frameWait = chain2.FrameLatencyWaitableObject;
+        }
+
         _composition.CreateTargetForHwnd(hwnd, true, out _target).CheckError();
         _visual = _composition.CreateVisual();
         _visual.SetContent(_swapChain);
@@ -89,7 +117,8 @@ internal sealed class DCompPresenter : IDisposable
         Width = width;
         Height = height;
         CreateBackBuffer();
-        Log.Info($"DirectComposition: flip-sequential swap chain {width}x{height} B8G8R8A8 on {Native.Hex(hwnd)}");
+        Log.Info($"DirectComposition: flip-sequential swap chain {width}x{height} B8G8R8A8 on {Native.Hex(hwnd)}, " +
+                 (_frameWait != 0 ? "paced by the frame latency waitable object (latency 1)" : "paced by DwmFlush"));
     }
 
     /// <summary>Resizes the swap chain buffers (a monitor switch or a resolution change).</summary>
@@ -101,7 +130,7 @@ internal sealed class DCompPresenter : IDisposable
         }
 
         ReleaseBackBuffer();
-        _swapChain.ResizeBuffers(BufferCount, (uint)width, (uint)height, Format.Unknown, SwapChainFlags.None).CheckError();
+        _swapChain.ResizeBuffers(BufferCount, (uint)width, (uint)height, Format.Unknown, _flags).CheckError();
         Width = width;
         Height = height;
         CreateBackBuffer();
@@ -114,6 +143,14 @@ internal sealed class DCompPresenter : IDisposable
         if (_swapChain is null)
         {
             return false;
+        }
+
+        // Wait until the previous frame is shown (immediate when idle), then draw with the freshest state.
+        if (_frameWait != 0 && Native.WaitForSingleObjectEx(_frameWait, FrameWaitMs, false) != Native.WAIT_OBJECT_0
+            && !_frameWaitTimeoutLogged)
+        {
+            Log.Warn($"the frame latency waitable object was not signalled within {FrameWaitMs} ms; drawing anyway");
+            _frameWaitTimeoutLogged = true;
         }
 
         _context.BeginDraw();
@@ -133,6 +170,11 @@ internal sealed class DCompPresenter : IDisposable
         }
 
         Presents++;
+        if (_frameWait == 0)
+        {
+            Native.DwmFlush();
+        }
+
         return true;
     }
 
@@ -150,6 +192,12 @@ internal sealed class DCompPresenter : IDisposable
         _visual = null;
         _target?.Dispose();
         _target = null;
+        if (_frameWait != 0)
+        {
+            Native.CloseHandle(_frameWait);
+            _frameWait = 0;
+        }
+
         _swapChain?.Dispose();
         _swapChain = null;
         Width = 0;

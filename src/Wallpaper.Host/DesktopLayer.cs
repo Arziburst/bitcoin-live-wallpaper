@@ -155,6 +155,24 @@ internal sealed unsafe class DesktopLayer : IDisposable
     public bool Move(SurfacePlacement placement, ScreenRect monitorBounds) =>
         State is not null && Place(placement, monitorBounds, 0, Native.SWP_NOACTIVATE | Native.SWP_NOZORDER);
 
+    /// <summary>
+    /// Whether our window really covers the monitor at <paramref name="monitorBounds"/> (screen coordinates) with the
+    /// placement's size. After a display change Progman can move after we placed our window, which leaves the
+    /// surface offset; true while detached.
+    /// </summary>
+    public bool IsAt(ScreenRect monitorBounds, SurfacePlacement placement, out ScreenRect actual)
+    {
+        actual = default;
+        if (State is null || !Native.GetWindowRect(Window, out var rect))
+        {
+            return true;
+        }
+
+        actual = new ScreenRect(rect.Left, rect.Top, rect.Right, rect.Bottom);
+        return rect.Left == monitorBounds.Left && rect.Top == monitorBounds.Top
+            && rect.Width == placement.Width && rect.Height == placement.Height;
+    }
+
     /// <summary>Raised layout: put our window directly below DefView again and the shell's WorkerW at the bottom.</summary>
     public bool FixZOrder()
     {
