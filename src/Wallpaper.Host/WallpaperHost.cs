@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using BitcoinWallpaper.Chart.Core.Candles;
 using BitcoinWallpaper.Chart.Core.Desktop;
 using BitcoinWallpaper.Chart.Core.Motion;
+using BitcoinWallpaper.Chart.Core.Pause;
 using BitcoinWallpaper.Host.Scene;
 using BitcoinWallpaper.Host.Settings;
+using BitcoinWallpaper.Market.Data;
 
 namespace BitcoinWallpaper.Host;
 
@@ -40,11 +43,11 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     /// <summary>Attach failures are logged the first time and then every this many attempts (about once a minute).</summary>
     private const int AttachFailureLogEvery = 30;
 
-    /// <summary>Re-placing a window that is not where it should be is tried this often per placement.</summary>
-    private const int MisplacedRetries = 3;
-
     /// <summary>Presents closer together than this belong to one tween (the frame-rate statistics).</summary>
     private static readonly TimeSpan TweenGap = TimeSpan.FromMilliseconds(100);
+
+    private static readonly TrayStatus OffStatus =
+        new(WallpaperState.Off, PauseReason.None, FeedState.Connecting, MarketSource.Binance, null, null);
 
     private static WallpaperHost? _current;
 
@@ -55,6 +58,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private readonly ConcurrentQueue<Action> _posted = new();
     private readonly uint _taskbarCreatedMessage;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly MisplacedCounter _misplaced = new();
     private nint _window;
     private DesktopLayer? _layer;
     private DCompPresenter? _presenter;
@@ -65,6 +69,8 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private bool _sceneStarted;
     private bool _paused;
     private bool _sessionRegistered;
+    private nint _displayPowerNotification;
+    private uint? _displayPower;
     private bool _shutDown;
     private bool _noMonitorLogged;
     private bool _firstMemoryLogDone;
@@ -72,7 +78,6 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private string? _pendingTrigger;
     private TimeSpan _pendingSince;
     private long _presentsBefore;
-    private int _misplacedTries;
 
     // Frame statistics since the last frames log line.
     private long _minutePresents;
@@ -138,6 +143,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             Log.Warn("WTSRegisterSessionNotification failed; lock/unlock is covered by the watchdog only");
         }
 
+        RegisterDisplayPower();
         _tray = new TrayIcon(_window, TrayMessage, _menu);
         _tray.Add();
         _layer = new DesktopLayer(OnLayerLost);
@@ -155,6 +161,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         else
         {
             Log.Info("the wallpaper is off: only the tray icon runs until it is turned on");
+            UpdateTip();
         }
 
         RunMessageLoop();
@@ -206,12 +213,19 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         _pendingTrigger = null;
         _pendingSince = TimeSpan.Zero;
         _attachFailures = 0;
-        _misplacedTries = 0;
+        _misplaced.Reset();
+        if (_sceneStarted)
+        {
+            // Off is a near-zero footprint: the pause monitor stops polling too (#23).
+            Try(() => _animated?.Suspend());
+        }
+
         Try(() => _presenter?.Unbind());
         DropPresenter();
         Try(() => _layer?.Detach("turned off"));
         _placement = null;
         _dirty = false;
+        UpdateTip();
         LogMemory();
     }
 
@@ -227,11 +241,35 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 _sceneStarted = true;
                 _animated.Start(this);
             }
+            else
+            {
+                _animated.Resume();
+            }
 
             Native.SetTimer(_window, PollTimer, (uint)_animated.PollInterval.TotalMilliseconds, 0);
         }
 
+        UpdateTip();
         Check(trigger);
+    }
+
+    /// <summary>
+    /// D-26: the tooltip from the scene's last poll, or "Off"; the tray sends it only when the text changed. Off adds
+    /// no timer: it is set once here when turned off.
+    /// </summary>
+    private void UpdateTip()
+    {
+        if (_tray is null)
+        {
+            return;
+        }
+
+        var text = !_enabled
+            ? TrayStatusText.Build(OffStatus, TimeZoneInfo.Local)
+            : _animated is not null
+                ? TrayStatusText.Build(_animated.TrayStatus, TimeZoneInfo.Local)
+                : TrayStatusText.Title;
+        _tray.SetTip(text);
     }
 
     /// <summary>
@@ -318,6 +356,12 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             _sessionRegistered = false;
         }
 
+        if (_displayPowerNotification != 0)
+        {
+            Native.UnregisterPowerSettingNotification(_displayPowerNotification);
+            _displayPowerNotification = 0;
+        }
+
         if (_window != 0)
         {
             Native.DestroyWindow(_window);
@@ -381,21 +425,25 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             else if (placement == _placement && !_layer.IsAt(active.Bounds, placement, out var actual))
             {
                 // Progman can move after the 300 ms check of a display change; the watchdog puts us back.
-                if (_misplacedTries < MisplacedRetries)
+                if (_misplaced.TryNext())
                 {
-                    _misplacedTries++;
                     Log.Warn($"{trigger}: our window is at {actual}, expected {active.Bounds} ({placement.Width}x{placement.Height}); " +
-                             $"re-placing (try {_misplacedTries} of {MisplacedRetries})");
+                             $"re-placing (try {_misplaced.Tries} of {MisplacedCounter.MaxTries})");
                     if (_layer.Move(placement, active.Bounds))
                     {
                         _dirty = true;
                     }
                 }
             }
-            else if (placement != _placement)
+            else if (placement == _placement)
+            {
+                // In place: a later misplacement gets its tries again (#23).
+                _misplaced.ObservedInPlace();
+            }
+            else
             {
                 Log.Info($"{trigger}: re-layout {Describe(_placement)} -> {Describe(placement)}");
-                _misplacedTries = 0;
+                _misplaced.Reset();
                 if (_layer.Move(placement, active.Bounds))
                 {
                     _placement = placement;
@@ -445,7 +493,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         var waited = _pendingSince == TimeSpan.Zero ? "" : $" ({(_clock.Elapsed - _pendingSince).TotalSeconds:0.0} s after the event)";
         Log.Info($"{trigger}: attached{waited}{(_attachFailures > 0 ? $" after {_attachFailures} failed attempts" : "")}");
         _attachFailures = 0;
-        _misplacedTries = 0;
+        _misplaced.Reset();
         _placement = placement;
         _dirty = true;
     }
@@ -593,7 +641,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 OnSessionChange((uint)wParam);
                 return 0;
             case Native.WM_POWERBROADCAST:
-                OnPower((uint)wParam);
+                OnPower((uint)wParam, lParam);
                 return 1;
             case Native.WM_TIMER:
                 OnTimer(wParam);
@@ -661,6 +709,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 break;
             case PollTimer:
                 _animated?.Poll();
+                UpdateTip();
                 break;
             case FramesTimer:
                 LogFrames();
@@ -697,10 +746,13 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         }
     }
 
-    private void OnPower(uint change)
+    private void OnPower(uint change, nint data)
     {
         switch (change)
         {
+            case Native.PBT_POWERSETTINGCHANGE when data != 0:
+                OnPowerSetting((Native.POWERBROADCAST_SETTING*)data);
+                break;
             case Native.PBT_APMSUSPEND:
                 Log.Info("power: suspending");
                 break;
@@ -709,6 +761,42 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 CheckSoon("resume");
                 break;
         }
+    }
+
+    /// <summary>
+    /// D-15: GUID_SESSION_DISPLAY_STATUS (per session, Windows 8+; not GUID_CONSOLE_DISPLAY_STATE, which follows the
+    /// console). Windows sends the current state right after the registration; it is handled like any other. Known
+    /// limit: a TV switched off with its remote often keeps the HDMI link up, so Windows reports nothing and the
+    /// wallpaper keeps drawing. A failed registration leaves the wallpaper running as before.
+    /// </summary>
+    private void RegisterDisplayPower()
+    {
+        _displayPowerNotification = Native.RegisterPowerSettingNotification(
+            _window, Native.GUID_SESSION_DISPLAY_STATUS, Native.DEVICE_NOTIFY_WINDOW_HANDLE);
+        if (_displayPowerNotification == 0)
+        {
+            Log.Warn($"RegisterPowerSettingNotification(display status) failed: error {Marshal.GetLastPInvokeError()}; " +
+                     "the wallpaper keeps drawing while the display is off");
+        }
+    }
+
+    private void OnPowerSetting(Native.POWERBROADCAST_SETTING* setting)
+    {
+        if (setting->PowerSetting != Native.GUID_SESSION_DISPLAY_STATUS || setting->DataLength < sizeof(uint))
+        {
+            return;
+        }
+
+        var value = *(uint*)setting->Data;
+        if (value == _displayPower)
+        {
+            return;
+        }
+
+        Log.Info($"display: {DisplayPower.Describe(value)}" +
+                 (DisplayPower.IsOn(value) ? "" : "; no frames until it is on, the market data keeps running"));
+        _displayPower = value;
+        _animated?.SetDisplayOn(DisplayPower.IsOn(value));
     }
 
     private nint CreateMessageWindow()

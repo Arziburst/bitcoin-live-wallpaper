@@ -54,6 +54,11 @@ internal static unsafe partial class Native
     public const uint PBT_APMSUSPEND = 0x4;
     public const uint PBT_APMRESUMESUSPEND = 0x7;
     public const uint PBT_APMRESUMEAUTOMATIC = 0x12;
+    public const uint PBT_POWERSETTINGCHANGE = 0x8013;
+    public const uint DEVICE_NOTIFY_WINDOW_HANDLE = 0x0;
+
+    /// <summary>The display state of our session (Windows 8+): Data is a DWORD, 0 off, 1 on, 2 dimmed.</summary>
+    public static readonly Guid GUID_SESSION_DISPLAY_STATUS = new(0x2B84C20E, 0xAD23, 0x4DDF, 0x93, 0xDB, 0x05, 0xFF, 0xBD, 0x7E, 0xFC, 0xA5);
 
     public const uint WTS_CONSOLE_CONNECT = 0x1;
     public const uint WTS_CONSOLE_DISCONNECT = 0x2;
@@ -78,6 +83,7 @@ internal static unsafe partial class Native
     public const uint RDW_UPDATENOW = 0x0100;
 
     public const uint NIM_ADD = 0x0;
+    public const uint NIM_MODIFY = 0x1;
     public const uint NIM_DELETE = 0x2;
     public const uint NIM_SETVERSION = 0x4;
     public const uint NIF_MESSAGE = 0x1;
@@ -364,6 +370,21 @@ internal static unsafe partial class Native
     [LibraryImport("wtsapi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool WTSUnRegisterSessionNotification(nint hwnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POWERBROADCAST_SETTING
+    {
+        public Guid PowerSetting;
+        public uint DataLength;
+        public fixed byte Data[1];
+    }
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial nint RegisterPowerSettingNotification(nint recipient, in Guid powerSetting, uint flags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnregisterPowerSettingNotification(nint handle);
 
     [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", StringMarshalling = StringMarshalling.Utf16)]
     public static partial nint GetModuleHandle(string? moduleName);

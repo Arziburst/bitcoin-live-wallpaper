@@ -5,6 +5,7 @@ using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Chart.Core.Pause;
 using BitcoinWallpaper.Chart.Render.D2D;
 using BitcoinWallpaper.Host.Playback;
+using BitcoinWallpaper.Host.Settings;
 using BitcoinWallpaper.Market.Data;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
@@ -25,6 +26,7 @@ internal sealed class LiveChartScene : IAnimatedScene
     private readonly IDWriteFactory5 _dwrite;
     private readonly ChartFonts _fonts;
     private readonly ChartRenderer _renderer;
+    private readonly PauseCombiner _pause = new();
 
     private WallpaperHost? _host;
     private LiveScene? _live;
@@ -32,6 +34,7 @@ internal sealed class LiveChartScene : IAnimatedScene
     private MarketSource? _source;
     private FeedMode? _mode;
     private bool _firstDataLogged;
+    private DateTimeOffset? _lastLiveAt;
 
     /// <summary>The candle interval shown (D-13), chosen for the screen on the first frame and on display changes;
     /// null before the first frame.</summary>
@@ -66,7 +69,7 @@ internal sealed class LiveChartScene : IAnimatedScene
         _monitor.Start();
 
         // What happened before the window existed is applied at once: the current pause state and data.
-        _live.OnPlayback(_monitor.State);
+        ApplyMonitor(_monitor.State, _monitor.LastVerdict.Reason);
         Poll();
         _live.OnHostStarted();
     }
@@ -101,7 +104,25 @@ internal sealed class LiveChartScene : IAnimatedScene
 
         _live.OnData(candles, _client.Ticker);
         _live.OnFeedStale(state == FeedState.Stale);
+        NoteLive(state);
     }
+
+    // D-26: "offline since HH:mm" is the last poll that saw the feed live (Market.Data keeps no such time).
+    private void NoteLive(FeedState state)
+    {
+        if (state == FeedState.Live)
+        {
+            _lastLiveAt = _time.GetUtcNow();
+        }
+    }
+
+    public TrayStatus TrayStatus => new(
+        WallpaperState.On,
+        _pause.Verdict.State == PlaybackState.Paused ? _pause.Verdict.Reason : PauseReason.None,
+        _feedState ?? FeedState.Connecting,
+        _source ?? _client.Source,
+        _client.Ticker?.Last,
+        _lastLiveAt);
 
     public void Draw(ID2D1DeviceContext context, SurfacePlacement placement)
     {
@@ -173,7 +194,40 @@ internal sealed class LiveChartScene : IAnimatedScene
         _host?.Post(() =>
         {
             Log.Info(state == PlaybackState.Paused ? $"pause monitor: paused ({reason})" : "pause monitor: running");
-            _live?.OnPlayback(state);
+            ApplyMonitor(state, reason);
         });
+    }
+
+    /// <summary>The combined pause (the monitor's reason, else DisplayOff); Running when neither pauses.</summary>
+    public PauseVerdict Pause => _pause.Verdict;
+
+    // D-15: the display state and the monitor's verdict go through one PauseCombiner into the one pause path.
+    public void SetDisplayOn(bool displayOn)
+    {
+        _pause.SetDisplayOn(displayOn);
+        _live?.OnPlayback(_pause.Verdict.State);
+    }
+
+    // #23: Off from the tray stops the pause monitor's polling; a scene not started yet has nothing to stop or start.
+    public void Suspend()
+    {
+        if (_live is not null)
+        {
+            _monitor.Stop();
+        }
+    }
+
+    public void Resume()
+    {
+        if (_live is not null)
+        {
+            _monitor.Start();
+        }
+    }
+
+    private void ApplyMonitor(PlaybackState state, PauseReason reason)
+    {
+        _pause.SetMonitor(state, reason);
+        _live?.OnPlayback(_pause.Verdict.State);
     }
 }

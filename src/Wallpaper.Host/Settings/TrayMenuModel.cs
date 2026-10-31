@@ -7,25 +7,53 @@ public enum TrayCommand
     ToggleWallpaper,
     StartWithWindows,
     Exit,
+    OpenLogs,
+    Version,
 }
 
-public sealed record TrayMenuItem(TrayCommand Command, string Text, bool Checked);
+public sealed record TrayMenuItem(TrayCommand Command, string Text, bool Checked, bool Enabled = true);
 
 /// <summary>
 /// The tray menu as data (D-16); TrayIcon draws <see cref="Items"/> and passes the chosen command to
 /// <see cref="Invoke"/>. A new item is a new <see cref="TrayCommand"/>, one line in <see cref="Items"/> and one case in
 /// <see cref="Invoke"/>.
 /// </summary>
-public sealed class TrayMenuModel(WallpaperToggle toggle, Autostart autostart, Action exit)
+/// <param name="openFolder">Opens a folder in Explorer; without it there is no Open logs item (D-26).</param>
+/// <param name="logsDirectory">What Open logs opens; null is <see cref="Log.Directory"/>.</param>
+/// <param name="version">Shown greyed as "Version x.y.z"; null leaves the item out (D-26).</param>
+public sealed class TrayMenuModel(
+    WallpaperToggle toggle,
+    Autostart autostart,
+    Action exit,
+    Action<string>? openFolder = null,
+    string? logsDirectory = null,
+    string? version = null)
 {
     /// <summary>Read afresh each time the menu opens.</summary>
-    public IReadOnlyList<TrayMenuItem> Items =>
-    [
-        new(TrayCommand.ToggleWallpaper,
-            toggle.State == WallpaperState.On ? "Turn wallpaper off" : "Turn wallpaper on", false),
-        new(TrayCommand.StartWithWindows, "Start with Windows", autostart.IsEnabled),
-        new(TrayCommand.Exit, "Exit", false),
-    ];
+    public IReadOnlyList<TrayMenuItem> Items
+    {
+        get
+        {
+            var items = new List<TrayMenuItem>
+            {
+                new(TrayCommand.ToggleWallpaper,
+                    toggle.State == WallpaperState.On ? "Turn wallpaper off" : "Turn wallpaper on", false),
+                new(TrayCommand.StartWithWindows, "Start with Windows", autostart.IsEnabled),
+            };
+            if (openFolder is not null)
+            {
+                items.Add(new(TrayCommand.OpenLogs, "Open logs", false));
+            }
+
+            if (version is not null)
+            {
+                items.Add(new(TrayCommand.Version, "Version " + version, false, Enabled: false));
+            }
+
+            items.Add(new(TrayCommand.Exit, "Exit", false));
+            return items;
+        }
+    }
 
     public void Invoke(TrayCommand command)
     {
@@ -47,6 +75,11 @@ public sealed class TrayMenuModel(WallpaperToggle toggle, Autostart autostart, A
                 break;
             case TrayCommand.Exit:
                 exit();
+                break;
+            case TrayCommand.OpenLogs when openFolder is not null:
+                var directory = logsDirectory ?? Log.Directory;
+                Directory.CreateDirectory(directory);
+                openFolder(directory);
                 break;
         }
     }

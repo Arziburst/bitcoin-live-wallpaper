@@ -21,6 +21,10 @@ public interface IPlaybackMonitor : IDisposable
 
     /// <summary>Starts polling; a second call does nothing.</summary>
     void Start();
+
+    /// <summary>Stops polling: no event is raised after it returns, and a poll running on another thread has
+    /// finished by then (like Dispose). Start polls again; Stop when not polling does nothing. Not a Dispose.</summary>
+    void Stop();
 }
 
 public sealed class PausedChangedEventArgs(PlaybackState state, PauseVerdict verdict) : EventArgs

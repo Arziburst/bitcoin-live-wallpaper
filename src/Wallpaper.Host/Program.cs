@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using BitcoinWallpaper.Host.Install;
 using BitcoinWallpaper.Host.Playback;
 using BitcoinWallpaper.Host.Scene;
 using BitcoinWallpaper.Host.Settings;
+using BitcoinWallpaper.Host.Supervisor;
 using BitcoinWallpaper.Market.Data;
 using Microsoft.Win32;
 using Velopack;
@@ -13,6 +16,8 @@ namespace BitcoinWallpaper.Host;
 /// <summary>
 /// BitcoinWallpaper.exe: one instance per session, lives behind the desktop icons until Exit in the tray.
 /// A start while it runs turns the running wallpaper on and exits (D-17); "--autostart" marks the sign-in launch.
+/// Every normal start runs a small headless supervisor that runs the wallpaper as its child (the same exe with
+/// "--wallpaper-child") and restarts it after a crash (D-24).
 /// Log: %LOCALAPPDATA%\BitcoinWallpaper\logs\wallpaper.log.
 /// </summary>
 internal static class Program
@@ -20,19 +25,53 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        // First: Velopack's install/uninstall hooks run here and exit the process.
+        // First, in both modes: Velopack's install/uninstall hooks run here and exit the process.
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ => InstallHooks.AfterInstall())
             .OnBeforeUninstallFastCallback(_ => InstallHooks.BeforeUninstall())
             .Run();
 
         var kind = Launch.Parse(args);
+        var crashTest = ProcessChildLauncher.IsCrashTest(args);
+        return ProcessChildLauncher.IsChild(args) ? RunWallpaper(kind, crashTest) : RunSupervisor(kind, crashTest);
+    }
+
+    /// <summary>No window, no tray, no GPU: starts the wallpaper child, waits for it and restarts it after a crash.</summary>
+    private static int RunSupervisor(LaunchKind kind, bool crashTest)
+    {
+        Log.Open(canRoll: false);
+        try
+        {
+            var exe = Environment.ProcessPath!;
+            Log.Info($"supervisor starting ({kind} start{(crashTest ? ", crash test" : "")}): the wallpaper runs as its " +
+                     $"child and comes back after a crash, at most {RestartPolicy.MaxRestarts} times in " +
+                     $"{RestartPolicy.Window.TotalMinutes:0} minutes");
+            var supervisor = new Supervisor.Supervisor(new ProcessChildLauncher(exe), new SystemSupervisorClock(), Log.Info,
+                new StartGuard(exe).CanStart);
+            var code = supervisor.Run(kind, crashTest);
+            Log.Info($"supervisor exits (code {code})");
+            return code;
+        }
+        catch (Exception e)
+        {
+            Log.Error($"supervisor failed: {e}");
+            return 1;
+        }
+        finally
+        {
+            Log.Close();
+        }
+    }
+
+    private static int RunWallpaper(LaunchKind kind, bool crashTest)
+    {
         var control = new WallpaperControl();
         var toggle = new WallpaperToggle(new FileSettingsStore(FileSettingsStore.DefaultPath), control);
         using var channel = new WindowInstanceChannel();
 
         // Only the running instance rolls the log; a second start writes its lines and exits.
         Log.Open(canRoll: false);
+        CrashHandler.Install();
         var exit = new SingleInstanceStartup(channel, toggle).Run(kind);
         if (exit is { } secondStart)
         {
@@ -49,6 +88,10 @@ internal static class Program
         {
             Log.Info($"BitcoinWallpaper starting ({kind} start, wallpaper {toggle.State}); Windows {WindowsVersion()}, " +
                      $"process DPI awareness {Native.DescribeAwareness(Native.GetThreadDpiAwarenessContext())}; log {Log.FilePath}");
+            if (crashTest)
+            {
+                CrashHandler.StartCrashTest();
+            }
 
             var autostart = InstallHooks.CurrentAutostart();
             if (IsInstalledBySetup())
@@ -69,11 +112,13 @@ internal static class Program
 
             using var monitor = new PlaybackMonitor();
             using var scene = new LiveChartScene(client, monitor, TimeProvider.System);
-            var menu = new TrayMenuModel(toggle, autostart, () => Native.PostQuitMessage(0));
+            var menu = new TrayMenuModel(toggle, autostart, () => Native.PostQuitMessage(0),
+                openFolder: OpenFolder, logsDirectory: Log.Directory, version: AppVersion());
             using (var host = new WallpaperHost(scene, menu, channel))
             {
                 control.Bind(host, feed);
                 code = host.Run();
+                CrashHandler.HostReturned(code);
             }
 
             monitor.Dispose();
@@ -83,9 +128,12 @@ internal static class Program
         }
         catch (Exception e)
         {
-            Log.Error($"failed: {e}");
+            // A crash (D-24): logged with its stack, and the supervisor restarts the wallpaper. A window that cannot
+            // be created is no exception: host.Run returns 1 and nothing restarts. A failing cleanup after host.Run
+            // returned keeps its code (an Exit must never restart).
+            code = CrashHandler.Escaped(e);
             feed?.Stop();
-            return code = 1;
+            return code;
         }
         finally
         {
@@ -107,6 +155,41 @@ internal static class Program
             Log.Warn($"Velopack locator: {e.Message}");
             return false;
         }
+    }
+
+    /// <summary>Open logs (D-26): Explorer on the folder; a failure is logged, a tray click never ends the host.</summary>
+    private static void OpenFolder(string path)
+    {
+        try
+        {
+            var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+            start.ArgumentList.Add(path);
+            Process.Start(start)?.Dispose();
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"tray: Explorer could not open {path}: {e.Message}");
+        }
+    }
+
+    /// <summary>The installed Velopack version, else the assembly's informational version without its +commit.</summary>
+    private static string? AppVersion()
+    {
+        try
+        {
+            if (IsInstalledBySetup() && VelopackLocator.Current.CurrentlyInstalledVersion is { } installed)
+            {
+                return installed.ToString();
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"Velopack version: {e.Message}");
+        }
+
+        var informational = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        return informational?.Split('+')[0];
     }
 
     private static string WindowsVersion()
