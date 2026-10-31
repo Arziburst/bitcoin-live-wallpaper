@@ -41,9 +41,6 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     /// <summary>Attach failures are logged the first time and then every this many attempts (about once a minute).</summary>
     private const int AttachFailureLogEvery = 30;
 
-    /// <summary>Re-placing a window that is not where it should be is tried this often per placement.</summary>
-    private const int MisplacedRetries = 3;
-
     /// <summary>Presents closer together than this belong to one tween (the frame-rate statistics).</summary>
     private static readonly TimeSpan TweenGap = TimeSpan.FromMilliseconds(100);
 
@@ -56,6 +53,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private readonly ConcurrentQueue<Action> _posted = new();
     private readonly uint _taskbarCreatedMessage;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly MisplacedCounter _misplaced = new();
     private nint _window;
     private DesktopLayer? _layer;
     private DCompPresenter? _presenter;
@@ -75,7 +73,6 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private string? _pendingTrigger;
     private TimeSpan _pendingSince;
     private long _presentsBefore;
-    private int _misplacedTries;
 
     // Frame statistics since the last frames log line.
     private long _minutePresents;
@@ -210,7 +207,13 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         _pendingTrigger = null;
         _pendingSince = TimeSpan.Zero;
         _attachFailures = 0;
-        _misplacedTries = 0;
+        _misplaced.Reset();
+        if (_sceneStarted)
+        {
+            // Off is a near-zero footprint: the pause monitor stops polling too (#23).
+            Try(() => _animated?.Suspend());
+        }
+
         Try(() => _presenter?.Unbind());
         DropPresenter();
         Try(() => _layer?.Detach("turned off"));
@@ -230,6 +233,10 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 // Requests made before the window existed are applied here (the scene kept them).
                 _sceneStarted = true;
                 _animated.Start(this);
+            }
+            else
+            {
+                _animated.Resume();
             }
 
             Native.SetTimer(_window, PollTimer, (uint)_animated.PollInterval.TotalMilliseconds, 0);
@@ -391,21 +398,25 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             else if (placement == _placement && !_layer.IsAt(active.Bounds, placement, out var actual))
             {
                 // Progman can move after the 300 ms check of a display change; the watchdog puts us back.
-                if (_misplacedTries < MisplacedRetries)
+                if (_misplaced.TryNext())
                 {
-                    _misplacedTries++;
                     Log.Warn($"{trigger}: our window is at {actual}, expected {active.Bounds} ({placement.Width}x{placement.Height}); " +
-                             $"re-placing (try {_misplacedTries} of {MisplacedRetries})");
+                             $"re-placing (try {_misplaced.Tries} of {MisplacedCounter.MaxTries})");
                     if (_layer.Move(placement, active.Bounds))
                     {
                         _dirty = true;
                     }
                 }
             }
-            else if (placement != _placement)
+            else if (placement == _placement)
+            {
+                // In place: a later misplacement gets its tries again (#23).
+                _misplaced.ObservedInPlace();
+            }
+            else
             {
                 Log.Info($"{trigger}: re-layout {Describe(_placement)} -> {Describe(placement)}");
-                _misplacedTries = 0;
+                _misplaced.Reset();
                 if (_layer.Move(placement, active.Bounds))
                 {
                     _placement = placement;
@@ -455,7 +466,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         var waited = _pendingSince == TimeSpan.Zero ? "" : $" ({(_clock.Elapsed - _pendingSince).TotalSeconds:0.0} s after the event)";
         Log.Info($"{trigger}: attached{waited}{(_attachFailures > 0 ? $" after {_attachFailures} failed attempts" : "")}");
         _attachFailures = 0;
-        _misplacedTries = 0;
+        _misplaced.Reset();
         _placement = placement;
         _dirty = true;
     }

@@ -154,6 +154,23 @@ internal sealed class LiveChartScene : IAnimatedScene
         _live?.OnPlayback(_pause.Verdict.State);
     }
 
+    // #23: Off from the tray stops the pause monitor's polling; a scene not started yet has nothing to stop or start.
+    public void Suspend()
+    {
+        if (_live is not null)
+        {
+            _monitor.Stop();
+        }
+    }
+
+    public void Resume()
+    {
+        if (_live is not null)
+        {
+            _monitor.Start();
+        }
+    }
+
     private void ApplyMonitor(PlaybackState state, PauseReason reason)
     {
         _pause.SetMonitor(state, reason);

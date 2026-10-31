@@ -52,6 +52,14 @@ public sealed class LiveScene
     /// <summary>Something arrived before the host started: one frame is requested at start.</summary>
     private bool pendingFrame;
 
+    /// <summary>The last candle given to the motion.</summary>
+    private Candle? applied;
+
+    /// <summary>A forming-candle update waiting for the coalescing interval to end.</summary>
+    private Candle? held;
+
+    private DateTimeOffset? lastFormingTween;
+
     public LiveScene(TimeProvider time, IFrameHost host)
     {
         ArgumentNullException.ThrowIfNull(time);
@@ -70,19 +78,79 @@ public sealed class LiveScene
     public void OnData(IReadOnlyList<Candle> snapshot, Ticker24h? latestTicker)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (Equals(latestTicker, ticker) && snapshot.SequenceEqual(candles))
+        if (Equals(latestTicker, ticker) && snapshot.SequenceEqual(candles) && held is null)
         {
             return;
         }
 
+        var tickerChanged = !Equals(latestTicker, ticker);
+        var restChanged = !SameButLast(snapshot, candles);
         candles = snapshot;
         ticker = latestTicker;
-        if (snapshot.Count > 0)
+        var moved = snapshot.Count > 0 && ApplyCoalesced(snapshot[^1]);
+        if (tickerChanged || restChanged || moved)
         {
-            motion.Apply(snapshot[^1]);
+            Changed();
+        }
+    }
+
+    /// <summary>At most one forming-candle tween starts per this interval, on any feed (#23, D-6).</summary>
+    public static TimeSpan FormingMinInterval { get; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Feeds the latest candle to the motion, coalescing forming-candle tweens: inside the interval after a tween
+    /// started the candle is held (the newest replaces the older), and the first OnData after the interval starts
+    /// the tween towards the last held value. A new bar, an older one or a candle with the shown OHLC applies at
+    /// once and drops what is held. True when the motion changed.
+    /// </summary>
+    private bool ApplyCoalesced(Candle latest)
+    {
+        if (applied is null || latest.OpenTime != applied.OpenTime || SameOhlc(latest, applied))
+        {
+            held = null;
+            if (latest == applied)
+            {
+                return false;
+            }
+
+            motion.Apply(latest);
+            applied = latest;
+            return true;
         }
 
-        Changed();
+        var now = time.GetUtcNow();
+        if (lastFormingTween is { } last && now - last < FormingMinInterval)
+        {
+            held = latest;
+            return false;
+        }
+
+        held = null;
+        motion.Apply(latest);
+        applied = latest;
+        lastFormingTween = now;
+        return true;
+    }
+
+    private static bool SameOhlc(Candle a, Candle b) =>
+        a.Open == b.Open && a.High == b.High && a.Low == b.Low && a.Close == b.Close;
+
+    private static bool SameButLast(IReadOnlyList<Candle> a, IReadOnlyList<Candle> b)
+    {
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < a.Count - 1; i++)
+        {
+            if (a[i] != b[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public void OnFeedStale(bool isStale)
