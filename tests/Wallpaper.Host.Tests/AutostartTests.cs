@@ -8,6 +8,11 @@ namespace BitcoinWallpaper.Host.Tests;
 // run and on a tray toggle, removes it on toggle-off and in the uninstall hook, updates a stale path after an
 // update, and never touches HKLM.
 //
+// D-17 (c): the Run value also carries the argument --autostart, so the sign-in launch can be told apart from a
+// start by the user (SecondStartTests.cs). Round 2 changed every expected Run value in this file from "\"<exe>\""
+// to "\"<exe>\" --autostart" (the RunValue helper) and added
+// EnsureCurrentPath_adds_the_autostart_argument_to_an_old_value.
+//
 // API SKETCH (written before the code, #237). Namespace BitcoinWallpaper.Host.Install, src/Wallpaper.Host/Install/.
 //
 //   // The per-user Run key and nothing else. Implementations address exactly
@@ -37,13 +42,14 @@ namespace BitcoinWallpaper.Host.Tests;
 //       public const string ValueName  = "BitcoinWallpaper";
 //       public const string RunKeyPath = @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 //       public const string RunSubKey  = @"Software\Microsoft\Windows\CurrentVersion\Run";   // under HKCU
+//       public const string AutostartArgument = "--autostart";   // D-17: marks the launch at sign-in
 //
 //       public Autostart(IRegistryRunKey runKey, IFirstRunMarker marker, string exePath);
 //
 //       public bool IsEnabled { get; }    // the ValueName value exists in the Run key (whatever path it holds)
-//       public void Enable();             // tray toggle on: ValueName = "\"" + exePath + "\""
+//       public void Enable();             // tray toggle on: ValueName = "\"" + exePath + "\" " + AutostartArgument
 //       public void Disable();            // tray toggle off: deletes ValueName; no-op when missing
-//       public void EnsureCurrentPath();  // value present but not the quoted current exe path -> rewrite it;
+//       public void EnsureCurrentPath();  // value present but not exactly the current Run value -> rewrite it;
 //                                         // value present and already current -> no write; absent -> stays absent
 //       public void OnStartup();          // every app start. Marker not set (first run): Enable() then marker.Set().
 //                                         // Marker set: EnsureCurrentPath() only (a user's Disable is respected).
@@ -52,7 +58,7 @@ namespace BitcoinWallpaper.Host.Tests;
 //
 // Rules the tests rely on:
 // - Autostart touches only the ValueName value of the Run key: other programs' values are never written or removed.
-// - The value is the exe path wrapped in double quotes, nothing else (no arguments).
+// - The value is the exe path wrapped in double quotes, one space, then --autostart; nothing else.
 // - Nothing under src/Wallpaper.Host/Install/ mentions HKLM / HKEY_LOCAL_MACHINE / LocalMachine.
 public class AutostartTests
 {
@@ -61,7 +67,7 @@ public class AutostartTests
     private const string OtherName = "OneDrive";
     private const string OtherValue = "\"C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe\" /background";
 
-    private static string Quoted(string path) => "\"" + path + "\"";
+    private static string RunValue(string path) => "\"" + path + "\" --autostart";
 
     private sealed class FakeRunKey : IRegistryRunKey
     {
@@ -108,7 +114,7 @@ public class AutostartTests
 
         autostart.Enable();
 
-        Assert.Equal(Quoted(ExeV1), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV1), key.GetValue("BitcoinWallpaper"));
         Assert.True(autostart.IsEnabled);
         Assert.Equal(OtherValue, key.GetValue(OtherName));
     }
@@ -127,7 +133,7 @@ public class AutostartTests
 
         Assert.False(autostart.IsEnabled);
 
-        key.Values["BitcoinWallpaper"] = Quoted(ExeV1);   // written by someone else (an earlier run)
+        key.Values["BitcoinWallpaper"] = RunValue(ExeV1);   // written by someone else (an earlier run)
         Assert.True(autostart.IsEnabled);
 
         key.Values.Remove("BitcoinWallpaper");
@@ -184,7 +190,7 @@ public class AutostartTests
         autostart.Enable();
 
         Assert.True(autostart.IsEnabled);
-        Assert.Equal(Quoted(ExeV1), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV1), key.GetValue("BitcoinWallpaper"));
     }
 
     // ---- EnsureCurrentPath (after an update the exe path changes) ----
@@ -193,12 +199,12 @@ public class AutostartTests
     public void EnsureCurrentPath_rewrites_a_stale_path()
     {
         var key = KeyWithNeighbour();
-        key.Values["BitcoinWallpaper"] = Quoted(ExeV1);
+        key.Values["BitcoinWallpaper"] = RunValue(ExeV1);
         var autostart = new Autostart(key, new FakeMarker(), ExeV2);
 
         autostart.EnsureCurrentPath();
 
-        Assert.Equal(Quoted(ExeV2), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV2), key.GetValue("BitcoinWallpaper"));
         Assert.Equal(OtherValue, key.GetValue(OtherName));
     }
 
@@ -211,7 +217,20 @@ public class AutostartTests
 
         autostart.EnsureCurrentPath();
 
-        Assert.Equal(Quoted(ExeV2), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV2), key.GetValue("BitcoinWallpaper"));
+    }
+
+    [Fact]
+    public void EnsureCurrentPath_adds_the_autostart_argument_to_an_old_value()
+    {
+        var key = new FakeRunKey();
+        key.Values["BitcoinWallpaper"] = "\"" + ExeV2 + "\"";   // written by a build before D-17: no --autostart
+        var autostart = new Autostart(key, new FakeMarker(), ExeV2);
+
+        autostart.EnsureCurrentPath();
+
+        Assert.Equal(RunValue(ExeV2), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal("--autostart", Autostart.AutostartArgument);
     }
 
     [Fact]
@@ -231,12 +250,12 @@ public class AutostartTests
     public void EnsureCurrentPath_does_not_write_when_the_path_is_current()
     {
         var key = new FakeRunKey();
-        key.Values["BitcoinWallpaper"] = Quoted(ExeV2);
+        key.Values["BitcoinWallpaper"] = RunValue(ExeV2);
         var autostart = new Autostart(key, new FakeMarker(), ExeV2);
 
         autostart.EnsureCurrentPath();
 
-        Assert.Equal(Quoted(ExeV2), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV2), key.GetValue("BitcoinWallpaper"));
         Assert.Empty(key.Writes);
     }
 
@@ -251,7 +270,7 @@ public class AutostartTests
 
         autostart.OnStartup();
 
-        Assert.Equal(Quoted(ExeV1), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV1), key.GetValue("BitcoinWallpaper"));
         Assert.True(autostart.IsEnabled);
         Assert.True(marker.IsSet);
         Assert.Equal(OtherValue, key.GetValue(OtherName));
@@ -286,12 +305,12 @@ public class AutostartTests
         var key = new FakeRunKey();
         var marker = new FakeMarker();
         new Autostart(key, marker, ExeV1).OnStartup();
-        Assert.Equal(Quoted(ExeV1), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV1), key.GetValue("BitcoinWallpaper"));
 
         var updated = new Autostart(key, marker, ExeV2);
         updated.OnStartup();
 
-        Assert.Equal(Quoted(ExeV2), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV2), key.GetValue("BitcoinWallpaper"));
         Assert.True(updated.IsEnabled);
         Assert.True(marker.IsSet);
     }
@@ -307,7 +326,7 @@ public class AutostartTests
         new Autostart(key, marker, ExeV1).OnStartup();
 
         Assert.Empty(key.Writes);
-        Assert.Equal(Quoted(ExeV1), key.GetValue("BitcoinWallpaper"));
+        Assert.Equal(RunValue(ExeV1), key.GetValue("BitcoinWallpaper"));
     }
 
     [Fact]
@@ -347,7 +366,7 @@ public class AutostartTests
     public void Uninstall_hook_removes_a_stale_value_too()
     {
         var key = new FakeRunKey();
-        key.Values["BitcoinWallpaper"] = Quoted(ExeV1);
+        key.Values["BitcoinWallpaper"] = RunValue(ExeV1);
         var marker = new FakeMarker();
         marker.Set();
 
