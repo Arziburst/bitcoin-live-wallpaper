@@ -1,4 +1,7 @@
-﻿using System.Globalization;
+using System.Globalization;
+using BitcoinWallpaper.Host.Playback;
+using BitcoinWallpaper.Host.Scene;
+using BitcoinWallpaper.Market.Data;
 using Microsoft.Win32;
 
 namespace BitcoinWallpaper.Host;
@@ -29,9 +32,37 @@ internal static class Program
             Log.Info($"BitcoinWallpaper starting; Windows {WindowsVersion()}, process DPI awareness " +
                      $"{Native.DescribeAwareness(Native.GetThreadDpiAwarenessContext())}; log {Log.FilePath}");
 
-            // The seam for #8: the chart scene replaces the placeholder here.
-            using var host = new WallpaperHost(new PlaceholderScene());
-            code = host.Run();
+            // The market data client runs on the thread pool from the start (the socket stays open while paused);
+            // the host reads it on its own thread. The pause monitor starts once the host window exists.
+            using var transport = new HttpMarketTransport();
+            var client = new MarketDataClient(transport, TimeProvider.System, Random.Shared.NextDouble);
+            using var stop = new CancellationTokenSource();
+            var feed = Task.Run(() => client.RunAsync(stop.Token));
+            _ = feed.ContinueWith(
+                t => Log.Error($"the market data client stopped: {t.Exception?.GetBaseException()}"),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+
+            using var monitor = new PlaybackMonitor();
+            using var scene = new LiveChartScene(client, monitor, TimeProvider.System);
+            using (var host = new WallpaperHost(scene))
+            {
+                code = host.Run();
+            }
+
+            monitor.Dispose();
+            stop.Cancel();
+            try
+            {
+                if (!feed.Wait(TimeSpan.FromSeconds(3)))
+                {
+                    Log.Warn("the market data client did not stop within 3 s");
+                }
+            }
+            catch (AggregateException)
+            {
+                // Cancelled, as asked (a fault was logged when it happened).
+            }
+
             return code;
         }
         catch (Exception e)

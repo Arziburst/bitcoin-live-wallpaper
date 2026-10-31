@@ -13,6 +13,10 @@ namespace BitcoinWallpaper.Chart.Render.D2D;
 /// <param name="Pair">For the headline, e.g. "BTC/USDT".</param>
 /// <param name="Source">For the headline, e.g. "Binance".</param>
 /// <param name="IsStale">No fresh data for a while: the headline is dimmed and marked "delayed".</param>
+/// <param name="ShiftPitches">The new-bar shift (D-10): the series is drawn this many candle pitches right of its
+/// place; 0 for a still frame.</param>
+/// <param name="Pulse">The price colour pulse (D-10), 0..1: the headline price is tinted up or down this much.</param>
+/// <param name="PulseUp">The direction of the price change that started the pulse.</param>
 public sealed record ChartFrame(
     ChartLayout Layout,
     IReadOnlyList<Candle> Candles,
@@ -21,7 +25,10 @@ public sealed record ChartFrame(
     TimeZoneInfo TimeZone,
     string Pair,
     string Source,
-    bool IsStale = false)
+    bool IsStale = false,
+    double ShiftPitches = 0,
+    double Pulse = 0,
+    bool PulseUp = false)
 {
     public static ChartFrame Create(
         int widthPx,
@@ -33,7 +40,10 @@ public sealed record ChartFrame(
         TimeZoneInfo timeZone,
         string pair = "BTC/USDT",
         string source = "Binance",
-        bool isStale = false)
+        bool isStale = false,
+        double shiftPitches = 0,
+        double pulse = 0,
+        bool pulseUp = false)
     {
         ArgumentNullException.ThrowIfNull(candles);
         return new ChartFrame(
@@ -44,6 +54,9 @@ public sealed record ChartFrame(
             timeZone,
             pair,
             source,
-            isStale);
+            isStale,
+            shiftPitches,
+            pulse,
+            pulseUp);
     }
 }
