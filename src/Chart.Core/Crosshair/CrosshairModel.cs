@@ -13,7 +13,25 @@ public readonly record struct CursorPx(double X, double Y);
 /// <param name="CandleIndex">The candle whose slot holds <paramref name="X"/>, an index into the candles (0 = oldest).</param>
 /// <param name="Candle">candles[CandleIndex].</param>
 /// <param name="OverVolume">The cursor is over the volume pane.</param>
-public sealed record CrosshairState(double X, double Y, double? Price, int CandleIndex, Candle Candle, bool OverVolume);
+public sealed record CrosshairState(double X, double Y, double? Price, int CandleIndex, Candle Candle, bool OverVolume)
+{
+    /// <summary>The candles a crosshair line crosses, ascending, drawn slightly brighter: the horizontal line crosses each
+    /// candle whose low..high holds the price; the vertical line the slot's candle when it passes through its body or
+    /// wick columns.</summary>
+    public IReadOnlyList<int> HighlightedIndices { get; init; } = [];
+
+    /// <summary>The cursor is on the slot's candle (its body or its wick): the candle's values are shown next to it.</summary>
+    public bool OnCandle { get; init; }
+
+    // Value equality also over the highlighted indices (a list compares by reference).
+    public bool Equals(CrosshairState? other) =>
+        other is not null
+        && X.Equals(other.X) && Y.Equals(other.Y) && Price.Equals(other.Price) && CandleIndex == other.CandleIndex
+        && Equals(Candle, other.Candle) && OverVolume == other.OverVolume && OnCandle == other.OnCandle
+        && HighlightedIndices.SequenceEqual(other.HighlightedIndices);
+
+    public override int GetHashCode() => HashCode.Combine(X, Y, Price, CandleIndex, Candle, OverVolume, OnCandle, HighlightedIndices.Count);
+}
 
 /// <summary>Where the crosshair is and what it shows, from the cursor, the layout and the price scale (D-35). Pure.</summary>
 public static class CrosshairModel
@@ -51,15 +69,43 @@ public static class CrosshairModel
             return null;
         }
 
+        var first = Math.Max(0, layout.FirstDrawnIndex - 1);
+        var count = Math.Min(candles.Count, layout.CandleCount);
         var index = SlotAt(layout, x);
-        if (index < Math.Max(0, layout.FirstDrawnIndex - 1) || index >= Math.Min(candles.Count, layout.CandleCount))
+        if (index < first || index >= count)
         {
             return null;
         }
 
         var price = overPlot ? PriceAt(y, plot, priceMax, priceMin) : (double?)null;
-        return new CrosshairState(x, y, price, index, candles[index], overVolume);
+        var candle = candles[index];
+        var offset = Math.Abs(x - layout.CandleCenterX(index));
+
+        // The vertical line crosses the slot's candle on its body's (or wick's) columns, with a px of antialiasing.
+        var crossedByVertical = offset <= (layout.CandleBodyWidthPx / 2) + 1;
+        var lit = new List<int>();
+        for (var i = first; i < count; i++)
+        {
+            var c = candles[i];
+            if ((price is { } p && (double)c.Low <= p && p <= (double)c.High) || (i == index && crossedByVertical))
+            {
+                lit.Add(i);
+            }
+        }
+
+        var onCandle = false;
+        if (price is not null)
+        {
+            double YOf(decimal value) => plot.Y + ((priceMax - (double)value) / (priceMax - priceMin) * plot.Height);
+            var inBody = offset <= layout.CandleBodyWidthPx / 2 && Between(y, YOf(candle.Open), YOf(candle.Close));
+            var onWick = offset <= (layout.WickWidthPx / 2) + 2 && Between(y, YOf(candle.High), YOf(candle.Low));
+            onCandle = inBody || onWick;
+        }
+
+        return new CrosshairState(x, y, price, index, candle, overVolume) { HighlightedIndices = lit, OnCandle = onCandle };
     }
+
+    private static bool Between(double v, double a, double b) => v >= Math.Min(a, b) && v <= Math.Max(a, b);
 
     /// <summary>The price at <paramref name="y"/>: linear, <paramref name="priceMax"/> at plot.Y, <paramref name="priceMin"/>
     /// at plot.Bottom.</summary>

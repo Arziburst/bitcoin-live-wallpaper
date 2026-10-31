@@ -41,9 +41,7 @@ internal sealed class CrosshairView
         }
 
         items.Add(TimeTag(scene, state));
-        LitCandles = LitCandlesFor(scene, state);
-        OnCandle = IsOnCandle(scene, state);
-        if (OnCandle)
+        if (state.OnCandle)
         {
             items.Add(InfoBlock(scene, state));
         }
@@ -53,15 +51,12 @@ internal sealed class CrosshairView
 
     public CrosshairState? State { get; }
 
-    /// <summary>Order: price tag, time tag, info block; drawn in this order after everything else.</summary>
+    /// <summary>Order: price tag, time tag, info block (only with the cursor on a candle); drawn in this order after
+    /// everything else.</summary>
     public IReadOnlyList<CrosshairItem> Items { get; } = [];
 
-    /// <summary>The candles a crosshair line crosses, drawn slightly brighter: the horizontal line crosses every drawn
-    /// candle whose low..high holds the price; the vertical line the slot's candle when x is on its body or wick.</summary>
-    public IReadOnlyList<int> LitCandles { get; } = [];
-
-    /// <summary>The cursor is on the slot's candle (its body or its wick): the info block shows.</summary>
-    public bool OnCandle { get; }
+    /// <summary>The candles a crosshair line crosses (the model's), drawn slightly brighter.</summary>
+    public IReadOnlyList<int> LitCandles => State?.HighlightedIndices ?? [];
 
     /// <summary>The candle's open time in the frame's time zone, as the time tag and the info block show it.</summary>
     public static string Time(Candle candle, TimeZoneInfo zone) =>
@@ -74,15 +69,6 @@ internal sealed class CrosshairView
         $"O {ChartText.Price(c.Open)}  H {ChartText.Price(c.High)}  L {ChartText.Price(c.Low)}  C {ChartText.Price(c.Close)}",
         $"Vol {c.Volume.ToString("#,##0", Invariant)}",
     ];
-
-    // The body's (or the wick's, if wider) pixel columns of candle i as drawn: [left, right).
-    public static (double Left, double Right) CandleColumns(Scene s, int index)
-    {
-        var l = s.Layout;
-        var width = Math.Max(l.CandleBodyWidthPx, l.WickWidthPx);
-        var left = Math.Floor(s.CenterX(index) - (width / 2) + 0.5);
-        return (left, left + width);
-    }
 
     // Like the D-32 tags: centred in the price-axis column, the same height and padding.
     private static CrosshairItem PriceTag(ChartLayout l, double price, double y)
@@ -132,42 +118,5 @@ internal sealed class CrosshairView
         bx = Math.Clamp(bx, plot.X, Math.Max(plot.X, plot.Right - width));
         by = Math.Clamp(by, plot.Y, Math.Max(plot.Y, plot.Bottom - height));
         return new CrosshairItem(CrosshairItemKind.InfoBlock, string.Join("\n", lines), new RectPx(bx, by, width, height));
-    }
-
-    private static List<int> LitCandlesFor(Scene s, CrosshairState state)
-    {
-        var lit = new List<int>();
-        if (state.Price is { } price)
-        {
-            for (var i = s.FirstIndex; i < s.Candles.Count; i++)
-            {
-                var c = s.Candles[i];
-                if ((double)c.Low <= price && price <= (double)c.High)
-                {
-                    lit.Add(i);
-                }
-            }
-        }
-
-        var (left, right) = CandleColumns(s, state.CandleIndex);
-        if (state.X >= left && state.X < right && !lit.Contains(state.CandleIndex))
-        {
-            lit.Add(state.CandleIndex);
-        }
-
-        return lit;
-    }
-
-    // On the candle: x on its body's (or wick's) columns and y between its high and low as drawn.
-    private static bool IsOnCandle(Scene s, CrosshairState state)
-    {
-        if (state.Price is null)
-        {
-            return false;
-        }
-
-        var (left, right) = CandleColumns(s, state.CandleIndex);
-        var c = state.Candle;
-        return state.X >= left && state.X < right && state.Y >= s.Scale.Y(c.High) && state.Y <= s.Scale.Y(c.Low);
     }
 }
