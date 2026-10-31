@@ -66,12 +66,12 @@ public sealed partial class ChartRenderer
         using var up = target.CreateSolidColorBrush(Palette.Up);
         using var down = target.CreateSolidColorBrush(Palette.Down);
 
-        DrawCrosshairLines(target, s, state.X, state.Y, state.Price is not null, line);
+        DrawCrosshairLines(target, s, state.X, state.Y, line);
         foreach (var item in s.Crosshair.Items)
         {
             if (item.Kind == CrosshairItemKind.InfoBlock)
             {
-                DrawInfoBlock(target, s, item, block, border, primary, axis, IsUp(state.Candle) ? up : down);
+                DrawInfoBlock(target, s, item, block, border, primary, axis, state.Candle is { } c && IsUp(c) ? up : down);
             }
             else
             {
@@ -80,20 +80,15 @@ public sealed partial class ChartRenderer
         }
     }
 
-    // Solid thin lines on the pixel grid: the vertical one from the plot's top to the volume pane's bottom, the
-    // horizontal one edge to edge of the screen, through the price-axis column under the price tag (none over the
-    // volume pane).
-    private static void DrawCrosshairLines(ID2D1RenderTarget target, Scene s, double x, double y, bool horizontal, ID2D1Brush brush)
+    // A whole-monitor locator: solid thin lines on the pixel grid, edge to edge through the cursor wherever it is; the
+    // tags are drawn over them.
+    private static void DrawCrosshairLines(ID2D1RenderTarget target, Scene s, double x, double y, ID2D1Brush brush)
     {
         var l = s.Layout;
         var width = LineWidth(l);
         target.AntialiasMode = AntialiasMode.Aliased;
-        var top = (float)l.Plot.Y;
-        target.FillRectangle(new Rect((float)Math.Floor(x), top, width, (float)l.VolumePane.Bottom - top), brush);
-        if (horizontal)
-        {
-            target.FillRectangle(new Rect(0, (float)Math.Floor(y), l.WidthPx, width), brush);
-        }
+        target.FillRectangle(new Rect((float)Math.Floor(x), 0, width, l.HeightPx), brush);
+        target.FillRectangle(new Rect(0, (float)Math.Floor(y), l.WidthPx, width), brush);
     }
 
     // A tag like the D-32 tags (rounded box, mono text centred), opaque, so it covers what lies under it.

@@ -22,7 +22,7 @@ internal sealed class CrosshairView
     /// <summary>The info block's padding and its gap to the cursor, in em of the axis label size.</summary>
     public const double BlockPadding = 0.6;
 
-    public const double BlockGap = 0.8;
+    public const double BlockGap = 0.5;
 
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -40,10 +40,13 @@ internal sealed class CrosshairView
             items.Add(PriceTag(scene.Layout, price, state.Y));
         }
 
-        items.Add(TimeTag(scene, state));
-        if (state.OnCandle)
+        if (state.Candle is { } candle)
         {
-            items.Add(InfoBlock(scene, state));
+            items.Add(TimeTag(scene, state.X, candle));
+            if (state.OnCandle)
+            {
+                items.Add(InfoBlock(scene, state.X, state.Y, candle));
+            }
         }
 
         Items = items;
@@ -82,14 +85,14 @@ internal sealed class CrosshairView
     }
 
     // On the time axis, centred on the line; kept on the screen at its edges.
-    private static CrosshairItem TimeTag(Scene s, CrosshairState state)
+    private static CrosshairItem TimeTag(Scene s, double cursorX, Candle candle)
     {
         var l = s.Layout;
         var size = l.Text.AxisLabelPx;
-        var text = Time(state.Candle, s.Frame.TimeZone);
+        var text = Time(candle, s.Frame.TimeZone);
         var height = Scene.TagHeight * size;
         var width = Math.Ceiling((text.Length * Scene.MonoAdvance * size) + (2 * Scene.TagPadding * size));
-        var x = Math.Clamp(state.X - (width / 2), 0, Math.Max(0, l.WidthPx - width));
+        var x = Math.Clamp(cursorX - (width / 2), 0, Math.Max(0, l.WidthPx - width));
         var y = l.TimeAxis.Y + ((l.TimeAxis.Height - height) / 2);
         return new CrosshairItem(CrosshairItemKind.TimeTag, text, new RectPx(x, y, width, height));
     }
@@ -97,18 +100,17 @@ internal sealed class CrosshairView
     // Next to the cursor: above and right of it by default; left of it when the right side leaves the plot; below it
     // when there is no room above (then on the left first, away from the arrow of the mouse pointer). Always inside the
     // plot.
-    private static CrosshairItem InfoBlock(Scene s, CrosshairState state)
+    private static CrosshairItem InfoBlock(Scene s, double x, double y, Candle candle)
     {
         var l = s.Layout;
         var plot = l.Plot;
         var size = l.Text.AxisLabelPx;
-        var lines = InfoLines(state.Candle, s.Frame.TimeZone);
+        var lines = InfoLines(candle, s.Frame.TimeZone);
         var pad = BlockPadding * size;
         var gap = BlockGap * size;
         var width = Math.Ceiling((lines.Max(line => line.Length) * Scene.MonoAdvance * size) + (2 * pad));
         var height = Math.Ceiling((lines.Length * Scene.MonoLineHeight * size) + (2 * pad));
 
-        var (x, y) = (state.X, state.Y);
         var above = y - gap - height >= plot.Y;
         var right = x + gap + width <= plot.Right;
         var left = x - gap - width >= plot.X;

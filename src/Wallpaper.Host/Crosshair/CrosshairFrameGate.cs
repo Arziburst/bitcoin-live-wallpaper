@@ -29,5 +29,5 @@ public sealed class CrosshairFrameGate
 
     /// <summary>What a frame shows of the crosshair: the candle (its values and its highlight), the lines' pixel and
     /// whether the price tag is there.</summary>
-    private readonly record struct Key(int CandleIndex, double Column, double Row, bool HasPrice);
+    private readonly record struct Key(int? CandleIndex, double Column, double Row, bool HasPrice);
 }
