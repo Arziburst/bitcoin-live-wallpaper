@@ -188,4 +188,58 @@ public class LiveSceneReloadTests
         Assert.False(scene.NeedsFrame);
         Assert.Empty(host.Calls.Skip(before)); // paused: no frame request
     }
+
+    // Round 8 (PR #37 merged from main: at most one forming-candle tween per second, later updates held). Reset
+    // also forgets that coalescing state - the candle last applied, the held update and the time of the last forming
+    // tween - so a reload starts clean: the first forming change of the new series tweens at once (no ~1 s hold
+    // left over from the old series) and nothing of the old series is ever shown again.
+    [Fact]
+    public void After_a_reset_the_first_forming_change_tweens_at_once_and_nothing_held_from_the_old_series_shows()
+    {
+        static IReadOnlyList<Candle> WithLast(IReadOnlyList<Candle> series, decimal high, decimal close) =>
+            series.Take(series.Count - 1).Append(series[^1] with { High = high, Close = close }).ToArray();
+
+        var scene = ShowingFourHour(FourHourAtNoon); // 4h, newest 12:00 forming at 70800
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        // A forming tween of the old series starts, and the next update inside the second is held.
+        scene.OnData(WithLast(FourHourAtNoon, 70900m, 70850m), Ticker);
+        scene.TakeFrame();
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        scene.OnData(WithLast(FourHourAtNoon, 70950m, 70933m), Ticker); // held by the coalescing (old series)
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+
+        // The reload: the 6h series' newest candle opens at the same time (12:00), 300 ms after the old tween.
+        scene.Reset();
+        scene.OnData(SixHourAtNoon, Ticker);
+        Assert.Equal(SixHourAtNoon, scene.TakeFrame().Candles);
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+
+        // The first forming change of the new series: a tween starts now, from 71400 towards 71500.
+        var before = host.Calls.Count;
+        var update = WithLast(SixHourAtNoon, 71600m, 71500m);
+        scene.OnData(update, Ticker);
+        Assert.True(scene.NeedsFrame, "the first forming change after the reload did not start a tween (held from the old series?)");
+        Assert.Equal(["frame"], host.Calls.Skip(before).ToArray());
+        var first = scene.TakeFrame();
+        Assert.Equal(71400m, first.Candles[^1].Close); // the tween starts from what is shown
+        Assert.Equal(1.0, first.Pulse);
+
+        var old = new[] { 70800m, 70850m, 70933m };
+        var sawBetween = false;
+        for (var ms = 0; ms < 1500; ms += 25)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(25));
+            scene.OnData(update, Ticker); // the host polls the same snapshot every few ms
+            var frame = scene.TakeFrame();
+            var close = frame.Candles[^1].Close;
+            Assert.DoesNotContain(close, old);
+            Assert.InRange(close, 71400m, 71500m);
+            sawBetween |= close > 71400m && close < 71500m;
+            Assert.Equal(SixHourAtNoon.Take(SixHourAtNoon.Count - 1), frame.Candles.Take(frame.Candles.Count - 1));
+        }
+
+        Assert.True(sawBetween, "no tween frame between 71400 and 71500");
+        Assert.Equal(update[^1], scene.TakeFrame().Candles[^1]);
+    }
 }
