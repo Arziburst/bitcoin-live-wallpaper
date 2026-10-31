@@ -77,6 +77,7 @@ public sealed class ChartRenderer : IDisposable
         DrawAverages(target, paint, scene);
         DrawCandles(target, paint, scene);
         DrawLastPriceLine(target, paint, scene);
+        DrawDayLabels(target, paint, scene);
         target.PopAxisAlignedClip();
 
         DrawHeadline(target, paint, scene);
@@ -214,18 +215,16 @@ public sealed class ChartRenderer : IDisposable
                 EndCap = CapStyle.Round,
             },
             [0.01f, 2.6f]);
-        var labelSize = l.Text.AxisLabelPx * 0.82;
         target.AntialiasMode = AntialiasMode.PerPrimitive;
         using var gpu = Gpu(target);
-        foreach (var (price, name, above) in new[] { (hl.High, "24h high", true), (hl.Low, "24h low", false) })
+        foreach (var price in new[] { hl.High, hl.Low })
         {
             if (!s.OnScale(price))
             {
                 continue;
             }
 
-            var y = s.Scale.Y(price);
-            var yy = Snap(y) + 0.5f;
+            var yy = Snap(s.Scale.Y(price)) + 0.5f;
             if (gpu is not null)
             {
                 var before = target.Transform;
@@ -237,7 +236,30 @@ public sealed class ChartRenderer : IDisposable
             {
                 target.DrawLine(new Vector2((float)plot.X, yy), new Vector2((float)plot.Right, yy), paint.DayLine, width, dots);
             }
+        }
+    }
 
+    // The labels of the 24h lines and the edge markers, drawn over the candles, so the candles at the left edge never
+    // hide them.
+    private void DrawDayLabels(ID2D1RenderTarget target, Paint paint, Scene s)
+    {
+        if (s.DayHighLow is not { } hl)
+        {
+            return;
+        }
+
+        var l = s.Layout;
+        var plot = l.Plot;
+        var labelSize = l.Text.AxisLabelPx * 0.82;
+        target.AntialiasMode = AntialiasMode.PerPrimitive;
+        foreach (var (price, name, above) in new[] { (hl.High, "24h high", true), (hl.Low, "24h low", false) })
+        {
+            if (!s.OnScale(price))
+            {
+                continue;
+            }
+
+            var y = s.Scale.Y(price);
             var text = CachedLayout(name, ChartFonts.Inter, FontWeight.Medium, labelSize, plot.Width, TextAlignment.Leading);
             var tw = text.Metrics.Width;
             var th = text.Metrics.Height;

@@ -107,7 +107,8 @@ internal sealed class Scene
     /// <summary>The new-bar shift in px: every candle, average, volume bar and time tick is drawn this far right.</summary>
     public double ShiftPx { get; }
 
-    /// <summary>The oldest candle drawn: Layout.FirstDrawnIndex, one earlier while shifting.</summary>
+    /// <summary>The oldest candle drawn: the one before Layout.FirstDrawnIndex (cut by the plot's left edge, D-30, or
+    /// sliding out under it while shifting), or 0 when every candle is drawn.</summary>
     public int FirstIndex { get; }
 
     /// <summary>The candle's centre as drawn in this frame (with the shift).</summary>

@@ -271,9 +271,10 @@ public sealed class MarketDataClient
 
                 await Task.Delay(delay, time, ct);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && cycle.IsCancellationRequested)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested && cycle.IsCancellationRequested)
             {
-                // The interval changed: reload at once, on the same source.
+                // The interval changed: whatever the cancelled cycle ended with (the cancellation, or a request that
+                // failed after it without observing the token), reload at once, on the same source.
                 attempt = 0;
                 failedCycles = 0;
                 refusedSockets = 0;
