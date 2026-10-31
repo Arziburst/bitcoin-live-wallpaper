@@ -47,6 +47,7 @@ internal static unsafe partial class Native
     public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_POWERBROADCAST = 0x0218;
     public const uint WM_DPICHANGED = 0x02E0;
+    public const uint WM_SETTINGCHANGE = 0x001A;
     public const uint WM_WTSSESSION_CHANGE = 0x02B1;
     public const uint WM_APP = 0x8000;
     public const int HTTRANSPARENT = -1;
@@ -308,6 +309,11 @@ internal static unsafe partial class Native
     [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetMonitorInfo(nint monitor, MONITORINFOEXW* info);
+
+    public const uint MONITOR_DEFAULTTONULL = 0;
+
+    [LibraryImport("user32.dll")]
+    public static partial nint MonitorFromRect(in RECT rect, uint flags);
 
     [LibraryImport("shcore.dll")]
     public static partial int GetDpiForMonitor(nint monitor, int dpiType, out uint dpiX, out uint dpiY);

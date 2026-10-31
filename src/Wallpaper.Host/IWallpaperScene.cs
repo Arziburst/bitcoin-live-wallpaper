@@ -1,4 +1,5 @@
 using BitcoinWallpaper.Chart.Core.Desktop;
+using BitcoinWallpaper.Chart.Core.Layout;
 using Vortice.Direct2D1;
 
 namespace BitcoinWallpaper.Host;
@@ -16,4 +17,13 @@ internal interface IWallpaperScene
     /// monitor's DPI scale for sizing text. Called on the host's thread, between BeginDraw and EndDraw.
     /// </summary>
     void Draw(ID2D1DeviceContext context, SurfacePlacement placement);
+
+    /// <summary>
+    /// D-37: the rectangle of the surface (physical px, relative to its top-left) the chart content lies in: the
+    /// monitor's work area above the taskbar; the background still fills the whole surface. Called by the host on the
+    /// host thread when it changes, before the next <see cref="Draw"/>. A scene without a chart ignores it.
+    /// </summary>
+    void SetContent(RectPx content)
+    {
+    }
 }

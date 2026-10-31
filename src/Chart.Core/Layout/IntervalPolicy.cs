@@ -48,18 +48,20 @@ public static class IntervalPolicy
         return Ladder[^1];
     }
 
-    /// <summary><see cref="ForSlots"/> on the screen's layout; the slots do not depend on the candle count.</summary>
-    public static TimeSpan ForScreen(int widthPx, int heightPx, double dpiScale, TimeSpan period)
+    /// <summary><see cref="ForSlots"/> on the screen's layout for <paramref name="content"/> (null = the full screen,
+    /// D-37); the slots do not depend on the candle count.</summary>
+    public static TimeSpan ForScreen(int widthPx, int heightPx, double dpiScale, TimeSpan period, RectPx? content = null)
     {
-        var layout = LayoutEngine.Compute(widthPx, heightPx, dpiScale, 0);
+        var layout = LayoutEngine.Compute(widthPx, heightPx, dpiScale, 0, content);
         return ForSlots(layout.CandleSlots, layout.RightOffsetBars, period);
     }
 
-    /// <summary>The screen's interval; a reload when it differs from <paramref name="current"/> or nothing is
-    /// loaded yet (null).</summary>
-    public static IntervalDecision OnDisplay(TimeSpan? current, int widthPx, int heightPx, double dpiScale, TimeSpan period)
+    /// <summary>The screen's interval (for <paramref name="content"/>, null = the full screen); a reload when it
+    /// differs from <paramref name="current"/> or nothing is loaded yet (null).</summary>
+    public static IntervalDecision OnDisplay(
+        TimeSpan? current, int widthPx, int heightPx, double dpiScale, TimeSpan period, RectPx? content = null)
     {
-        var interval = ForScreen(widthPx, heightPx, dpiScale, period);
+        var interval = ForScreen(widthPx, heightPx, dpiScale, period, content);
         return new IntervalDecision(interval, current != interval);
     }
 }

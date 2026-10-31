@@ -77,7 +77,8 @@ internal sealed class LockScreenUpdater(MarketDataClient client, LockScreenImage
                 TimeZoneInfo.Local,
                 pair: kraken ? "BTC/USD" : "BTC/USDT",
                 source: kraken ? "Kraken" : "Binance",
-                interval: client.Interval);
+                interval: client.Interval,
+                content: SurfaceContent.FullMonitor(surface.Width, surface.Height)); // D-37: no taskbar on the lock screen
             _busy = true;
             Enqueue(() => SetAsync(frame, now, candleOpen));
         }

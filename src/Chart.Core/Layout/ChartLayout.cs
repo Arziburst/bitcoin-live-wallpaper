@@ -18,8 +18,10 @@ public sealed class ChartLayout
         double candleBodyWidthPx,
         double wickWidthPx,
         int candleCount,
-        int rightOffsetBars)
+        int rightOffsetBars,
+        RectPx content)
     {
+        Content = content;
         WidthPx = widthPx;
         HeightPx = heightPx;
         DpiScale = dpiScale;
@@ -40,9 +42,18 @@ public sealed class ChartLayout
         FirstDrawnIndex = candleCount - DrawnCandleCount;
     }
 
+    /// <summary>The screen's width: the surface and the background are full screen.</summary>
     public int WidthPx { get; }
 
+    /// <summary>The screen's height: the surface and the background are full screen.</summary>
     public int HeightPx { get; }
+
+    /// <summary>The rectangle the chart content lies in (the work area on the desktop, D-37); the full screen when the
+    /// layout was computed without one. Plot, volume pane, axes and headline all lie inside it.</summary>
+    public RectPx Content { get; }
+
+    /// <summary>The content is the whole screen (the layout is the one without a content).</summary>
+    public bool ContentIsFullScreen => Content == new RectPx(0, 0, WidthPx, HeightPx);
 
     public double DpiScale { get; }
 
