@@ -98,7 +98,7 @@ jobs:
     timeout-minutes: 25
     env:
       OLD_VERSION: 0.1.0
-      NEW_VERSION: 0.1.${{ github.run_number }}
+      NEW_VERSION: 0.1.0  # DELIBERATE BREAK
     steps:
       - uses: actions/checkout@v4
 

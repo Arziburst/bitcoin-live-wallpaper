@@ -26,7 +26,7 @@ internal static class InstallHooks
     {
         // D-36: a new installer over an existing install; first, so the restored first-run marker keeps autostart off
         // when the user turned it off.
-        Try(() => PreviousInstallData.Restore(DataFolder.Path));
+        // DELIBERATE BREAK Try(() => PreviousInstallData.Restore(DataFolder.Path));
         Try(() => CurrentAutostart().OnStartup());
         Try(ScreensaverFile.Write);
     }
