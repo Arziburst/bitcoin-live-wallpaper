@@ -68,7 +68,7 @@ and the logs.
 | `src/Chart.Core` | `net10.0` | Candle model, layout engine, pause decision. Pure, no Windows dependencies. |
 | `src/Market.Data` | `net10.0` | Market data client: Binance BTC/USDT primary, Kraken BTC/USD fallback. |
 | `src/Chart.Render.D2D` | `net10.0-windows` | Direct2D/DirectWrite renderer. |
-| `src/Wallpaper.Host` | `net10.0-windows` | The wallpaper process (WinExe, PerMonitorV2 DPI manifest). |
+| `src/Wallpaper.Host` | `net10.0-windows10.0.19041.0` (x64) | The wallpaper process (WinExe, PerMonitorV2 DPI manifest; the Windows SDK projection for the lock screen, D-34). |
 | `tests/Chart.Core.Tests` | `net10.0` | xUnit tests for Chart.Core. |
 | `tests/Market.Data.Tests` | `net10.0` | xUnit tests for Market.Data. |
 | `assets/icon` | | The owner's app icon: source PNG and the built ICO (D-14). |
