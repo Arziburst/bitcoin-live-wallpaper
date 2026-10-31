@@ -1,0 +1,1 @@
+{"channel":"ohlc","type":"update","timestamp":"2026-10-31T02:05:31.009871233Z","data":[{"symbol":"BTC/USD","open":77218.7,"high":77231.0,"low":77218.7,"close":77229.9,"trades":45,"volume":0.81234567,"vwap":77224.1,"interval_begin":"2026-10-31T02:05:00.000000000Z","interval":5,"timestamp":"2026-10-31T02:10:00.000000Z"}]}
