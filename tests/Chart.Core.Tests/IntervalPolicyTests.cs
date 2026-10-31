@@ -35,7 +35,8 @@
 //   }
 //
 // Expected intervals at 30 days, with the D-30 layout as corrected by the owner (plot from x = 0 to the price
-// axis, axis right edge at 98.5 % +- 0.5 % of W, right offset 0 bars (owner 2026-10-31); pitch unchanged):
+// axis whose column runs to the screen edge, Plot.Right where it was (the axis width + ~1.5 % from the edge),
+// right offset 0 bars (owner 2026-10-31); pitch unchanged):
 //   5120x1440 @1.75  pitch 16, ~305 slots  -> 4h (180 <= 305; 2h: 360 does not fit); ~305 drawn = ~50.8 days
 //   3840x2160 @1.0   TV, pitch 24, ~145    -> 6h (120 <= 145; 4h: 180 does not fit); ~145 drawn = ~36 days
 //   3840x2160 @1.5   desk, pitch 24, ~147  -> 6h

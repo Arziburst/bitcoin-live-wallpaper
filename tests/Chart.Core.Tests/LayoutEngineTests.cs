@@ -32,7 +32,7 @@
 //       int CandleCount;           // the candleCount passed to Compute
 //       int CandleSlots;           // floor(Plot.Width / CandlePitchPx)
 //       int RightOffsetBars;       // 0 (owner 2026-10-31): no empty slot right of the newest candle;
-//                                  // Plot.X == 0 and PriceAxis.Right at 98.5 % +- 0.5 % of WidthPx (D-30)
+//                                  // Plot.X == 0 (D-30); PriceAxis spans Plot.Right .. WidthPx (round 7)
 //       int DrawnCandleCount;      // min(CandleCount, CandleSlots - RightOffsetBars)
 //       int FirstDrawnIndex;       // CandleCount - DrawnCandleCount (index 0 = oldest candle)
 //       double CandleCenterX(int index);
@@ -183,13 +183,15 @@ public class LayoutEngineTests
             $"price axis width {l.PriceAxis.Width} too narrow for {l.Text.AxisLabelPx} px labels");
     }
 
-    // D-30 (#18, owner 2026-10-31), new: the price axis keeps ~1.5 % of the width from the right screen edge.
+    // Owner 2026-10-31 (round 7): the price-axis column spans Plot.Right .. the screen width, and its labels and tags
+    // are centred in it (renderer: PriceAxisCentringTests, PriceAxisItemsTests). Replaces
+    // "Price_axis_ends_about_1_5_percent_from_the_right_screen_edge" (InRange(PriceAxis.Right, 98 % W, 99 % W)).
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Price_axis_ends_about_1_5_percent_from_the_right_screen_edge(int w, int h, double s)
+    public void Price_axis_column_runs_to_the_right_screen_edge(int w, int h, double s)
     {
         var l = Layout(w, h, s);
-        Assert.InRange(Right(l.PriceAxis), 0.98 * w, 0.99 * w);
+        Assert.True(Math.Abs(Right(l.PriceAxis) - w) <= 0.5, $"price axis {l.PriceAxis} ends at {Right(l.PriceAxis)}, expected the screen width {w}");
     }
 
     [Theory]
@@ -220,14 +222,15 @@ public class LayoutEngineTests
     }
 
     [Fact]
-    public void Ultrawide_32_9_chart_spans_the_left_edge_to_98_5_percent_with_headline_top_right()
+    public void Ultrawide_32_9_chart_spans_the_left_edge_to_the_right_edge_with_headline_top_right()
     {
         const int w = 5120, h = 1440;
         var l = Layout(w, h, 1.75);
         // D-20 (#18): was "plot starts at ~8 % (±0.5 %)"; D-30: was "-0.5 <= Plot.X <= 1 % W", now the left edge.
         Assert.True(Math.Abs(l.Plot.X) <= 0.5, $"plot starts at {l.Plot.X}, expected the left screen edge (0)");
-        // D-30: was InRange(PriceAxis.Right, 96 % W, 98 % W); now 98.5 % ± 0.5 %.
-        Assert.InRange(Right(l.PriceAxis), 0.98 * w, 0.99 * w);
+        // Round 7: was InRange(PriceAxis.Right, 98 % W, 99 % W) (D-30: 96-98 % before that); the price-axis column
+        // now runs to the screen edge.
+        Assert.True(Math.Abs(Right(l.PriceAxis) - w) <= 0.5, $"price axis ends at {Right(l.PriceAxis)}, expected {w}");
         Assert.True(l.Headline.X >= w / 2.0, $"headline {l.Headline} not on the right");
         Assert.True(l.Headline.Y <= 0.06 * h, $"headline {l.Headline} not at the top");
         var toAxis = l.PriceAxis.X - Right(l.Headline);
