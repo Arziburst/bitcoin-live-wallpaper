@@ -5,7 +5,7 @@ namespace BitcoinWallpaper.Host.Install;
 
 /// <summary>
 /// The Velopack fast callbacks (they run in a short-lived process of the installed exe, then Velopack exits it).
-/// After install: autostart on (the first run does the same; whichever comes first wins) and BitcoinWallpaper.scr is
+/// After install: the user's files come back from the previous install when Setup ran over one (D-36), autostart on (the first run does the same; whichever comes first wins) and BitcoinWallpaper.scr is
 /// written next to the exe; after an update the .scr is written again (D-21). Before uninstall: the running instance
 /// exits (the normal wallpaper is back), the previous Windows screensaver is restored (D-21), the Run value, the
 /// settings, the first-run marker and the logs are removed; Velopack then deletes the program folder and the shortcuts.
@@ -24,6 +24,9 @@ internal static class InstallHooks
 
     public static void AfterInstall()
     {
+        // D-36: a new installer over an existing install; first, so the restored first-run marker keeps autostart off
+        // when the user turned it off.
+        Try(() => PreviousInstallData.Restore(DataFolder.Path));
         Try(() => CurrentAutostart().OnStartup());
         Try(ScreensaverFile.Write);
     }
