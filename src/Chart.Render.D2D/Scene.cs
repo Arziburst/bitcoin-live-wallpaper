@@ -1,4 +1,5 @@
 using BitcoinWallpaper.Chart.Core.Candles;
+using BitcoinWallpaper.Chart.Core.Crosshair;
 using BitcoinWallpaper.Chart.Core.Indicators;
 using BitcoinWallpaper.Chart.Core.Layout;
 
@@ -56,6 +57,13 @@ public static class FrameView
 
     /// <summary>The 50-candle average drawn, one entry per frame candle.</summary>
     public static IReadOnlyList<decimal?> Ma50(ChartFrame frame) => new Scene(frame).Ma50;
+
+    /// <summary>The crosshair under the frame's cursor (D-35); null: hidden or no cursor.</summary>
+    public static CrosshairState? Crosshair(ChartFrame frame) => new Scene(frame).Crosshair.State;
+
+    /// <summary>Exactly what is drawn for the crosshair (D-35), empty when hidden: the price tag (only over the plot),
+    /// the time tag, the info block (only with the cursor on a candle); drawn in this order, on top of everything.</summary>
+    public static IReadOnlyList<CrosshairItem> CrosshairItems(ChartFrame frame) => new Scene(frame).Crosshair.Items;
 }
 
 /// <summary>What a frame derives to, computed from the frame alone.</summary>
@@ -103,7 +111,15 @@ internal sealed class Scene
         }
 
         Caption = frame.IsStale ? caption + "  ·  delayed" : caption;
+
+        // D-35: the crosshair against this frame's own scale; hidden (null) draws nothing.
+        Crosshair = new CrosshairView(this, frame.Cursor is { } cursor
+            ? CrosshairModel.Compute(cursor, Layout, Candles, Scale.Max, Scale.Min, paused: false)
+            : null);
     }
+
+    /// <summary>The crosshair under the frame's cursor (D-35); its State null: nothing of it is drawn.</summary>
+    public CrosshairView Crosshair { get; }
 
     /// <summary>The candle interval of the frame.</summary>
     public TimeSpan Interval { get; }

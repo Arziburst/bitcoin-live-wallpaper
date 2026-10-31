@@ -1,4 +1,5 @@
 using BitcoinWallpaper.Chart.Core.Candles;
+using BitcoinWallpaper.Chart.Core.Crosshair;
 using BitcoinWallpaper.Chart.Core.Layout;
 
 namespace BitcoinWallpaper.Chart.Render.D2D;
@@ -32,6 +33,11 @@ public sealed record ChartFrame(
 {
     /// <summary>The candle interval of Candles: the countdown's close time, the time axis and the caption use it.</summary>
     public TimeSpan Interval { get; init; } = CandleInterval.FiveMinutes;
+
+    /// <summary>The mouse cursor in screen px for the crosshair (D-35), or null: no crosshair, and the frame is
+    /// pixel-identical to one without the feature. The host passes null while paused; a cursor where the crosshair is
+    /// hidden (<see cref="CrosshairModel.Compute"/>) draws nothing either.</summary>
+    public CursorPx? Cursor { get; init; }
 
     /// <param name="interval">The candle interval; null: 5 minutes.</param>
     public static ChartFrame Create(

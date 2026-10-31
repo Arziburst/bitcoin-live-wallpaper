@@ -20,7 +20,7 @@ namespace BitcoinWallpaper.Host;
 /// <see cref="IAnimatedScene"/>, once per display refresh while its tween runs (D-10). Turned off from the tray
 /// (D-16) only the window and the tray icon remain: see <see cref="DetachLayer"/>.
 /// </summary>
-internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
+internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
 {
     /// <summary>The hidden host window's class; a second start finds the running instance by it (D-17).</summary>
     internal const string WindowClass = "BitcoinWallpaper.Host";
@@ -242,6 +242,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         Try(() => _layer?.Detach("turned off"));
         _placement = null;
         _dirty = false;
+        UpdateCrosshair();
         UpdateTip();
         LogMemory();
     }
@@ -351,6 +352,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         }
 
         _shutDown = true;
+        DisposeCrosshair();
         Log.Info($"shutting down ({why}); {_presenter?.Presents ?? 0} presents with the current device, " +
                  $"{_presentsBefore} before");
         if (_window != 0)
@@ -484,6 +486,8 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
         {
             _pendingSince = TimeSpan.Zero; // settled; keep the event time while still waiting for the shell
         }
+
+        UpdateCrosshair();
     }
 
     private void TryAttach(SurfacePlacement placement, ScreenRect monitorBounds, string trigger)
@@ -672,6 +676,9 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
                 _dirty = true;
                 RenderIfDirty();
                 return 0;
+            case CursorMessage:
+                OnCursorMessage();
+                return 0;
             case InvokeMessage:
                 while (_posted.TryDequeue(out var action))
                 {
@@ -682,6 +689,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             case PauseMessage:
                 _paused = wParam != 0;
                 Log.Info(_paused ? "paused: no Present until resumed" : "resumed");
+                UpdateCrosshair();
                 RenderIfDirty();
                 return 0;
             case Native.WM_CLOSE:
