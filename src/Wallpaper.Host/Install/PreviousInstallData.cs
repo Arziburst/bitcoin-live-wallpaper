@@ -32,7 +32,6 @@ internal static class PreviousInstallData
         var restored = new List<string>();
         var failed = new List<string>();
         var previous = FindPrevious(root);
-        if (previous is not null) return new Result(previous, restored, failed); // DELIBERATE BREAK: generic copy off
         if (previous is null)
         {
             return new Result(null, restored, failed);
