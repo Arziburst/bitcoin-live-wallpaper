@@ -78,3 +78,14 @@ jobs:
           name: BLW_Installer
           path: bin/pack/releases/BLW_Installer.exe
           if-no-files-found: error
+
+      # The lock screen probe (#39) as one self-contained x64 exe, so the owner can run it without building.
+      - name: Publish LockScreenProbe.exe
+        run: dotnet publish tools/LockScreenProbe -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o probe
+
+      - name: Upload LockScreenProbe.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: LockScreenProbe
+          path: probe/LockScreenProbe.exe
+          if-no-files-found: error
