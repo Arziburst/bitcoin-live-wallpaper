@@ -33,24 +33,36 @@ public sealed class HeadlessRenderer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(frame);
         var (w, h) = (frame.Layout.WidthPx, frame.Layout.HeightPx);
-        using var bitmap = wic.CreateBitmap((uint)w, (uint)h, PixelFormat.Format32bppPBGRA, BitmapCreateCacheOption.CacheOnLoad);
-        var properties = new RenderTargetProperties(
-            RenderTargetType.Software,
-            new D2DPixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied),
-            96,
-            96,
-            RenderTargetUsage.None,
-            FeatureLevel.Default);
-        using (var target = d2d.CreateWicBitmapRenderTarget(bitmap, properties))
-        {
-            target.BeginDraw();
-            renderer.Draw(target, frame);
-            target.EndDraw().CheckError();
-        }
-
+        using var bitmap = Draw(frame);
         var pixels = new byte[w * h * 4];
         bitmap.CopyPixels((uint)(w * 4), pixels);
         return new BgraImage(w, h, pixels);
+    }
+
+    /// <summary>
+    /// Renders the frame (as <see cref="Render"/> does) and writes it as a 24-bit PNG of the frame's size at
+    /// <paramref name="path"/> (folder created, an existing file replaced). The PNG is written next to it under a
+    /// temporary name first and then moved over, so a reader never sees half a file and nothing else is left behind.
+    /// </summary>
+    public void RenderToPng(ChartFrame frame, string path)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        var full = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        var temporary = full + ".tmp";
+        try
+        {
+            using (var bitmap = Draw(frame))
+            {
+                WritePng(bitmap, (uint)frame.Layout.WidthPx, (uint)frame.Layout.HeightPx, temporary);
+            }
+
+            File.Move(temporary, full, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporary);
+        }
     }
 
     /// <summary>Writes the image as a 24-bit PNG (the image is opaque).</summary>
@@ -59,6 +71,38 @@ public sealed class HeadlessRenderer : IDisposable
         ArgumentNullException.ThrowIfNull(image);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         using var source = wic.CreateBitmapFromMemory((uint)image.Width, (uint)image.Height, PixelFormat.Format32bppBGRA, image.Pixels, (uint)(image.Width * 4));
+        WritePng(source, (uint)image.Width, (uint)image.Height, path);
+    }
+
+    private IWICBitmap Draw(ChartFrame frame)
+    {
+        var (w, h) = (frame.Layout.WidthPx, frame.Layout.HeightPx);
+        var bitmap = wic.CreateBitmap((uint)w, (uint)h, PixelFormat.Format32bppPBGRA, BitmapCreateCacheOption.CacheOnLoad);
+        try
+        {
+            var properties = new RenderTargetProperties(
+                RenderTargetType.Software,
+                new D2DPixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied),
+                96,
+                96,
+                RenderTargetUsage.None,
+                FeatureLevel.Default);
+            using var target = d2d.CreateWicBitmapRenderTarget(bitmap, properties);
+            target.BeginDraw();
+            renderer.Draw(target, frame);
+            target.EndDraw().CheckError();
+            return bitmap;
+        }
+        catch
+        {
+            bitmap.Dispose();
+            throw;
+        }
+    }
+
+    // The source is opaque: dropping its alpha channel loses nothing.
+    private void WritePng(IWICBitmapSource source, uint width, uint height, string path)
+    {
         using var converter = wic.CreateFormatConverter();
         converter.Initialize(source, PixelFormat.Format24bppBGR, BitmapDitherType.None, null, 0, BitmapPaletteType.Custom);
 
@@ -67,7 +111,7 @@ public sealed class HeadlessRenderer : IDisposable
         using var frame = encoder.CreateNewFrame(out var options);
         options?.Dispose();
         frame.Initialize();
-        frame.SetSize((uint)image.Width, (uint)image.Height);
+        frame.SetSize(width, height);
         var format = PixelFormat.Format24bppBGR;
         frame.SetPixelFormat(ref format);
         frame.WriteSource(converter);

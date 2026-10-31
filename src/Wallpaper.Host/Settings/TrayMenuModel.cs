@@ -1,4 +1,5 @@
 using BitcoinWallpaper.Host.Install;
+using BitcoinWallpaper.Host.LockScreenChart;
 using BitcoinWallpaper.Host.Screensaver;
 
 namespace BitcoinWallpaper.Host.Settings;
@@ -11,6 +12,7 @@ public enum TrayCommand
     OpenLogs,
     Version,
     UseAsScreensaver,
+    ShowLockScreen,
 }
 
 public sealed record TrayMenuItem(TrayCommand Command, string Text, bool Checked, bool Enabled = true);
@@ -24,6 +26,7 @@ public sealed record TrayMenuItem(TrayCommand Command, string Text, bool Checked
 /// <param name="logsDirectory">What Open logs opens; null is <see cref="Log.Directory"/>.</param>
 /// <param name="version">Shown greyed as "Version x.y.z"; null leaves the item out (D-26).</param>
 /// <param name="screensaver">The "Use as screensaver" check mark (D-21); null leaves the item out.</param>
+/// <param name="lockScreen">The "Show chart on lock screen" check mark (D-34); null leaves the item out.</param>
 public sealed class TrayMenuModel(
     WallpaperToggle toggle,
     Autostart autostart,
@@ -31,7 +34,8 @@ public sealed class TrayMenuModel(
     Action<string>? openFolder = null,
     string? logsDirectory = null,
     string? version = null,
-    ScreensaverSetting? screensaver = null)
+    ScreensaverSetting? screensaver = null,
+    LockScreenSetting? lockScreen = null)
 {
     /// <summary>Read afresh each time the menu opens.</summary>
     public IReadOnlyList<TrayMenuItem> Items
@@ -47,6 +51,11 @@ public sealed class TrayMenuModel(
             if (screensaver is not null)
             {
                 items.Add(new(TrayCommand.UseAsScreensaver, "Use as screensaver", screensaver.IsOn));
+            }
+
+            if (lockScreen is not null)
+            {
+                items.Add(new(TrayCommand.ShowLockScreen, "Show chart on lock screen", lockScreen.IsOn));
             }
 
             if (openFolder is not null)
@@ -84,6 +93,9 @@ public sealed class TrayMenuModel(
                 break;
             case TrayCommand.UseAsScreensaver:
                 screensaver?.Toggle();
+                break;
+            case TrayCommand.ShowLockScreen:
+                lockScreen?.Toggle();
                 break;
             case TrayCommand.Exit:
                 exit();
