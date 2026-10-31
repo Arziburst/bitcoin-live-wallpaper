@@ -5,7 +5,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Chart.Core\Chart.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Inter and JetBrains Mono (OFL-1.1), loaded as a private font collection from fonts\ next to the assembly. -->
+  <ItemGroup>
+    <None Include="..\..\assets\fonts\**\*" Link="fonts\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
