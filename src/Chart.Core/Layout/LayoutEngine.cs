@@ -7,9 +7,7 @@ public static class LayoutEngine
     // The price axis keeps 1.5 % of the width from the right screen edge (D-30).
     private const double AxisRightShare = 0.985;
     private const double BodyShare = 0.62;
-
-    // Empty space between the newest candle and the price axis, as a share of the width (D-30): new candles slide in.
-    private const double RightGapShare = 0.10;
+    private const int RightOffset = 8;
 
     // Aspect ratio at or above which the headline goes top-right (32:9, 21:9); below it top-left at the left margin.
     private const double WideAspect = 2.2;
@@ -79,7 +77,7 @@ public static class LayoutEngine
             BodyWidth(pitch, wick),
             wick,
             candleCount,
-            (int)Math.Ceiling(RightGapShare * w / pitch));
+            RightOffset);
     }
 
     private static TextSizes TextFor(double h, bool tv)
