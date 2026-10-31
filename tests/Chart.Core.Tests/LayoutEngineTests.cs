@@ -31,8 +31,8 @@
 //       double WickWidthPx;        // 1 desk, 2 TV
 //       int CandleCount;           // the candleCount passed to Compute
 //       int CandleSlots;           // floor(Plot.Width / CandlePitchPx)
-//       int RightOffsetBars;       // D-30: ceil(0.10 * WidthPx / CandlePitchPx) empty slots right of the newest candle
-//                                  // (was ~8); Plot.X == 0 and PriceAxis.Right at 98.5 % +- 0.5 % of WidthPx (D-30)
+//       int RightOffsetBars;       // ~8 empty slots right of the newest candle (D-30 as corrected by the owner:
+//                                  // no 10 % gap); Plot.X == 0 and PriceAxis.Right at 98.5 % +- 0.5 % of WidthPx
 //       int DrawnCandleCount;      // min(CandleCount, CandleSlots - RightOffsetBars)
 //       int FirstDrawnIndex;       // CandleCount - DrawnCandleCount (index 0 = oldest candle)
 //       double CandleCenterX(int index);
@@ -372,17 +372,13 @@ public class LayoutEngineTests
         Assert.Equal((int)Math.Floor(l.Plot.Width / l.CandlePitchPx + 1e-9), l.CandleSlots);
     }
 
-    // D-30 (#18, owner 2026-10-31): replaces "Right_offset_is_about_8_bars" (InRange(RightOffsetBars, 6, 10)):
-    // about 10 % of the screen width stays empty between the newest candle and the price axis.
+    // D-30 as corrected by the owner (2026-10-31): the 10 % gap before the price axis was not wanted; the right
+    // offset is about 8 bars again (this test is the original one, restored).
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Right_offset_is_10_percent_of_the_screen_width(int w, int h, double s)
+    public void Right_offset_is_about_8_bars(int w, int h, double s)
     {
-        var l = Layout(w, h, s);
-        Assert.Equal((int)Math.Ceiling(0.10 * w / l.CandlePitchPx), l.RightOffsetBars);
-        var emptyPx = l.RightOffsetBars * l.CandlePitchPx;
-        Assert.True(emptyPx >= 0.10 * w && emptyPx < (0.10 * w) + l.CandlePitchPx,
-            $"{emptyPx} px empty right of the newest candle, expected 10 % of {w} (+ under one pitch)");
+        Assert.InRange(Layout(w, h, s).RightOffsetBars, 6, 10);
     }
 
     [Theory]

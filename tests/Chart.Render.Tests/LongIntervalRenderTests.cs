@@ -47,7 +47,7 @@
 // - The caption names the frame's interval, never "5m" for a 4h frame.
 // - D-29 (owner 2026-10-31): the interval stays the 30-day one, but the chart fills every drawable slot with the
 //   history it has: drawn = min(candles, CandleSlots - RightOffsetBars), the oldest drawn candle at the plot's
-//   left edge (D-30 desk: ~273 drawn 4h candles, ~45 days); with less history (Kraken 6h: 120) all of it is drawn, anchored right.
+//   left edge (D-30 desk: ~297 drawn 4h candles, ~49 days); with less history (Kraken 6h: 120) all of it is drawn, anchored right.
 
 using System.Globalization;
 using System.Text.RegularExpressions;
