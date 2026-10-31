@@ -5,6 +5,7 @@ using BitcoinWallpaper.Chart.Core.Candles;
 using BitcoinWallpaper.Chart.Core.Desktop;
 using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Chart.Core.Pause;
+using BitcoinWallpaper.Host.LockScreenChart;
 using BitcoinWallpaper.Host.Scene;
 using BitcoinWallpaper.Host.Settings;
 using BitcoinWallpaper.Market.Data;
@@ -95,6 +96,22 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
         _channel = channel;
         _taskbarCreatedMessage = Native.RegisterWindowMessage("TaskbarCreated");
         _current = this;
+    }
+
+    /// <summary>The chart on the lock screen (D-34); null: none. Set before <see cref="Run"/>.</summary>
+    internal LockScreenUpdater? LockScreen { get; init; }
+
+    /// <summary>D-34: after each scene poll; the updater's own check is cheap and its work runs off this thread.</summary>
+    private void LockScreenTick()
+    {
+        try
+        {
+            LockScreen?.Tick(_placement, _enabled, WantsTweenFrame());
+        }
+        catch (Exception e)
+        {
+            Log.Error($"lock screen: the check failed: {e.Message}");
+        }
     }
 
     /// <summary>Thread-safe: ask for one new frame (the scene's data changed).</summary>
@@ -268,7 +285,7 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
         var text = !_enabled
             ? TrayStatusText.Build(OffStatus, TimeZoneInfo.Local)
             : _animated is not null
-                ? TrayStatusText.Build(_animated.TrayStatus, TimeZoneInfo.Local)
+                ? TrayStatusText.Build(_animated.TrayStatus with { LockScreenError = LockScreen?.LastError }, TimeZoneInfo.Local)
                 : TrayStatusText.Title;
         _tray.SetTip(text);
     }
@@ -717,6 +734,7 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
                 break;
             case PollTimer:
                 _animated?.Poll();
+                LockScreenTick();
                 UpdateTip();
                 break;
             case FramesTimer:

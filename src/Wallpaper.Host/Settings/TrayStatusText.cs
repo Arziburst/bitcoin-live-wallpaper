@@ -10,13 +10,15 @@ namespace BitcoinWallpaper.Host.Settings;
 /// <param name="Pause"><see cref="PauseReason.None"/> = not paused.</param>
 /// <param name="LastPrice">The last trade price in USD; null before the first data.</param>
 /// <param name="LastLiveAt">When the host last saw the feed live; null when it never was.</param>
+/// <param name="LockScreenError">The last lock screen failure (D-34); null when there is none.</param>
 public sealed record TrayStatus(
     WallpaperState Wallpaper,
     PauseReason Pause,
     FeedState Feed,
     MarketSource Source,
     decimal? LastPrice,
-    DateTimeOffset? LastLiveAt);
+    DateTimeOffset? LastLiveAt,
+    string? LockScreenError = null);
 
 /// <summary>
 /// The tray tooltip (D-26): the title, then one line by precedence Off &gt; Paused &gt; offline &gt; connecting &gt;
@@ -30,7 +32,13 @@ public static class TrayStatusText
     private const string Separator = " · ";
 
     public static string Build(TrayStatus status, TimeZoneInfo zone) =>
-        Shorten(Title + "\n" + Line(status, zone));
+        Shorten(Title + "\n" + Line(status, zone) + LockScreenSuffix(status));
+
+    // D-34: a lock screen failure ends the line, except when the wallpaper is Off.
+    private static string LockScreenSuffix(TrayStatus status) =>
+        status.LockScreenError is { } error && status.Wallpaper != WallpaperState.Off
+            ? Separator + "lock screen: " + error
+            : "";
 
     /// <summary>
     /// At most <paramref name="maxLength"/> chars: a longer text is cut and ends with "…"; a cut that would split a

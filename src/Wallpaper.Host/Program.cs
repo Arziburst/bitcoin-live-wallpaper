@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using BitcoinWallpaper.Host.Install;
+using BitcoinWallpaper.Host.LockScreenChart;
 using BitcoinWallpaper.Host.Playback;
 using BitcoinWallpaper.Host.Scene;
 using BitcoinWallpaper.Host.Screensaver;
@@ -122,15 +123,26 @@ internal static class Program
 
             using var monitor = new PlaybackMonitor();
             using var scene = new LiveChartScene(client, monitor, TimeProvider.System);
+
+            // D-34: the chart on the lock screen; the tray item's change reaches the updater on the host thread.
+            LockScreenUpdater? lockScreen = null;
+            var lockScreenSetting = new LockScreenSetting(LockScreenSetting.DefaultFilePath, Log.Warn,
+                on => lockScreen?.FeatureChanged(on));
+            lockScreen = new LockScreenUpdater(client, InstallHooks.CurrentLockScreenImages(), TimeProvider.System,
+                lockScreenSetting.IsOn);
+            Log.Info($"chart on the lock screen: {(lockScreenSetting.IsOn ? "on" : "off")}");
+
             var menu = new TrayMenuModel(toggle, autostart, () => Native.PostQuitMessage(0),
                 openFolder: OpenFolder, logsDirectory: Log.Directory, version: AppVersion(),
-                screensaver: InstallHooks.CurrentScreensaver());
-            using (var host = new WallpaperHost(scene, menu, channel))
+                screensaver: InstallHooks.CurrentScreensaver(), lockScreen: lockScreenSetting);
+            using (var host = new WallpaperHost(scene, menu, channel) { LockScreen = lockScreen })
             {
                 control.Bind(host, feed);
                 code = host.Run();
                 CrashHandler.HostReturned(code);
             }
+
+            lockScreen.WaitIdle(TimeSpan.FromSeconds(5));
 
             monitor.Dispose();
             feed.Stop();

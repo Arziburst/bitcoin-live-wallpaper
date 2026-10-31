@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Spike for task #39 (D-34 step 1): can an unpackaged per-user app set the lock screen image? Not part of the product.
+       x64 on purpose: LockScreen.SetImageFileAsync is documented not to work from x86 console apps on x64 Windows. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>
