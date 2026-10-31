@@ -53,3 +53,28 @@ jobs:
             mockups/
             tests/Chart.Render.Tests/bin/Release/net10.0-windows/golden-failures/
           if-no-files-found: ignore
+
+  # The per-user installer (Velopack, #9): the owner downloads Setup.exe from this artifact.
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET (global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Pack Setup.exe
+        shell: pwsh
+        run: ./scripts/pack.ps1 -Version 0.1.${{ github.run_number }}
+
+      - name: Upload Setup.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: BitcoinWallpaper-Setup
+          path: bin/pack/releases/*Setup.exe
+          if-no-files-found: error
