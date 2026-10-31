@@ -1,23 +1,20 @@
-// Contract #41 (D-35), criterion 3: when the host shows the crosshair, and when it asks for a frame. Pure decisions,
-// no Win32 calls; the host (hook or short poll) only feeds them.
+// Contract #41 (D-35), criterion 3, as changed by #47 (owner, 2026-10-31): when the host shows the crosshair, and when it
+// asks for a frame. Pure decisions, no Win32 calls; the host (hook) only feeds them.
 //
 // API SKETCH (written before the code, #237). Namespace BitcoinWallpaper.Host.Crosshair, src/Wallpaper.Host/Crosshair/.
+// #47: the crosshair follows the mouse anywhere on our monitor, whatever is under the cursor (windows, icons): the host no
+// longer asks WindowFromPoint / GetClassName and no longer probes explorer.
 //
-//   // What the host read at the cursor: its position (virtual-screen px, like PixelRect), the class name of the
-//   // window under it (WindowFromPoint; null when none) and whether the cursor is over a desktop icon (the icons
-//   // list view's hit test).
-//   public readonly record struct CursorSample(int X, int Y, string? WindowClass, bool OverIcon);
+//   // What the host read at the cursor: its position (virtual-screen px, like PixelRect). WindowClass and OverIcon are gone.
+//   public readonly record struct CursorSample(int X, int Y);
 //
 //   public static class CrosshairVisibility
 //   {
-//       // The window classes that are the bare desktop for this purpose: Progman, WorkerW, SHELLDLL_DefView,
-//       // SysListView32 (the icons list view) and our own layer "BitcoinWallpaper.Surface". Anything else (also null or
-//       // empty) is another window. Ordinal, case-sensitive.
-//       public static bool IsDesktopClass(string? windowClass);
-//
-//       // True only if: the wallpaper is on (state On) and not paused, the cursor lies in the wallpaper's monitor
-//       // (Left <= X < Right, Top <= Y < Bottom), the window under it is a desktop class, and it is not over an icon.
+//       // IsDesktopClass is removed.
+//       // True only if: the wallpaper is on (state On), not paused, and the cursor lies in the wallpaper's monitor
+//       // (Left <= X < Right, Top <= Y < Bottom). Nothing else.
 //       public static bool ShouldShow(CursorSample cursor, PixelRect wallpaperMonitor, bool paused, WallpaperState state);
+//       public static bool Contains(PixelRect rect, int x, int y);   // unchanged
 //   }
 //
 //   // The frame-request rule. Fed with the crosshair state the host computed (CrosshairModel.Compute, null = hidden)
@@ -44,46 +41,21 @@ public class CrosshairVisibilityTests
     // A second monitor to the left of the primary: negative coordinates are real.
     private static readonly PixelRect Monitor = new(-2560, 0, 0, 1440);
 
-    private static CursorSample Sample(int x = -1000, int y = 700, string? cls = "WorkerW", bool icon = false) =>
-        new(x, y, cls, icon);
+    private static CursorSample Sample(int x = -1000, int y = 700) => new(x, y);
 
     private static bool Show(CursorSample s, bool paused = false, WallpaperState state = WallpaperState.On) =>
         CrosshairVisibility.ShouldShow(s, Monitor, paused, state);
 
-    [Theory]
-    [InlineData("Progman")]
-    [InlineData("WorkerW")]
-    [InlineData("SHELLDLL_DefView")]
-    [InlineData("SysListView32")]
-    [InlineData("BitcoinWallpaper.Surface")]
-    public void The_bare_desktop_shows_it(string cls)
-    {
-        Assert.True(CrosshairVisibility.IsDesktopClass(cls));
-        Assert.True(Show(Sample(cls: cls)));
-    }
-
-    [Theory]
-    [InlineData("Chrome_WidgetWin_1")]
-    [InlineData("CabinetWClass")]
-    [InlineData("Shell_TrayWnd")]
-    [InlineData("ApplicationFrameWindow")]
-    [InlineData("progman")]
-    [InlineData("")]
-    [InlineData(null)]
-    public void Another_window_under_the_cursor_hides_it(string? cls)
-    {
-        Assert.False(CrosshairVisibility.IsDesktopClass(cls));
-        Assert.False(Show(Sample(cls: cls)));
-    }
-
+    // Changed by #47: the former "bare desktop shows it" / "another window hides it" / "over an icon hides it" cases
+    // (window classes, OverIcon) are gone with those inputs; the decision depends on position, state and pause only,
+    // so the same cursor shows wherever it lands on our monitor, over a half-screen window or an icon included.
     [Fact]
-    public void Over_a_desktop_icon_it_is_hidden_so_clicks_and_icons_work_as_before()
+    public void Wherever_the_cursor_is_on_the_monitor_it_shows_whatever_is_under_it()
     {
-        Assert.False(Show(Sample(cls: "SysListView32", icon: true)));
-        Assert.False(Show(Sample(cls: "SHELLDLL_DefView", icon: true)));
-        Assert.True(Show(Sample(cls: "SysListView32", icon: false)));
+        Assert.True(Show(Sample()));
+        Assert.True(Show(Sample(x: -2559, y: 3)));
+        Assert.True(Show(Sample(x: -1280, y: 1439)));
     }
-
     [Fact]
     public void Paused_or_off_hides_it_even_over_the_bare_desktop()
     {
