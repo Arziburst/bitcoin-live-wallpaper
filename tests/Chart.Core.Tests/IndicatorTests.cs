@@ -1,16 +1,14 @@
 // Contract #4, criterion 3: MA20/MA50, 24h high/low and the "closes in mm:ss" text.
 //
+// The shared candle model comes from task #3 (not this task's to define):
+//
+//   namespace BitcoinWallpaper.Chart.Core.Candles;
+//   record Candle(DateTimeOffset OpenTime, decimal Open, decimal High, decimal Low, decimal Close,
+//                 decimal Volume, bool IsClosed);       // OpenTime UTC; interval end = OpenTime + 5 min (D-8)
+//   record Ticker24h(decimal Last, decimal Open, decimal High, decimal Low, decimal ChangeAbs,
+//                    decimal ChangePercent, decimal Volume);
+//
 // API these tests need (the worker implements it as written; files in src/Chart.Core/Indicators/):
-//
-//   namespace BitcoinWallpaper.Chart.Core;
-//
-//   // One kline. Binance style: CloseTime = OpenTime + interval - 1 ms.
-//   public sealed record Candle(DateTimeOffset OpenTime, DateTimeOffset CloseTime,
-//                               decimal Open, decimal High, decimal Low, decimal Close, decimal Volume);
-//
-//   // Rolling 24h ticker (Binance /ticker/24hr or miniTicker).
-//   public sealed record Ticker24h(decimal LastPrice, decimal OpenPrice, decimal HighPrice,
-//                                  decimal LowPrice, decimal Volume);
 //
 //   namespace BitcoinWallpaper.Chart.Core.Indicators;
 //
@@ -27,19 +25,25 @@
 //
 //   public static class DayStats
 //   {
-//       public static HighLow HighLowFromTicker(Ticker24h ticker);              // ticker High / Low
-//       public static PriceChange ChangeFromTicker(Ticker24h ticker);           // Last - Open, (Last - Open) / Open * 100
-//       // Max High / min Low over candles with CloseTime > now - 24h (the forming candle included).
+//       public static HighLow HighLowFromTicker(Ticker24h ticker);              // ticker.High / ticker.Low
+//       // Absolute = Last - Open, Percent = (Last - Open) / Open * 100 (the tests give a ticker whose
+//       // ChangeAbs / ChangePercent agree with that, so reading those fields is equally fine).
+//       public static PriceChange ChangeFromTicker(Ticker24h ticker);
+//       // Max High / min Low over candles whose interval end (OpenTime + 5 min) > now - 24h
+//       // (the forming candle included).
 //       public static HighLow HighLowFromCandles(IReadOnlyList<Candle> candles, DateTimeOffset now);
 //   }
 //
 //   public static class CloseCountdown
 //   {
 //       // "closes in mm:ss": time from now to closeTime, rounded UP to whole seconds, never negative,
-//       // two-digit minutes and seconds, culture-invariant.
+//       // two-digit minutes and seconds, culture-invariant. The renderer passes the forming candle's
+//       // interval end (OpenTime + 5 min); at whole-second instants a Binance-style close time
+//       // (end - 1 ms) gives the same text.
 //       public static string Text(DateTimeOffset closeTime, DateTimeOffset now);
 //   }
 
+using BitcoinWallpaper.Chart.Core.Candles;
 using BitcoinWallpaper.Chart.Core.Indicators;
 
 namespace BitcoinWallpaper.Chart.Core.Tests;
@@ -59,7 +63,7 @@ public class IndicatorTests
         foreach (var c in closes)
         {
             var open = T0 + i * Five;
-            list.Add(new Candle(open, open + Five - TimeSpan.FromMilliseconds(1), prev, c + 1, c - 1, c, 1m));
+            list.Add(new Candle(open, prev, c + 1, c - 1, c, 1m, IsClosed: true));
             prev = c;
             i++;
         }
@@ -125,7 +129,8 @@ public class IndicatorTests
     [Fact]
     public void High_low_come_from_the_ticker()
     {
-        var t = new Ticker24h(LastPrice: 77490.96m, OpenPrice: 76000m, HighPrice: 78123.45m, LowPrice: 75012.5m, Volume: 12345.678m);
+        var t = new Ticker24h(Last: 77490.96m, Open: 76000m, High: 78123.45m, Low: 75012.5m,
+            ChangeAbs: 1490.96m, ChangePercent: 1.9618m, Volume: 12345.678m);
         Assert.Equal(new HighLow(78123.45m, 75012.5m), DayStats.HighLowFromTicker(t));
     }
 
@@ -135,7 +140,8 @@ public class IndicatorTests
     [InlineData(76000, 76000, 0, 0)]
     public void Change_24h_comes_from_the_ticker(double last, double open, double abs, double pct)
     {
-        var t = new Ticker24h((decimal)last, (decimal)open, 80000m, 70000m, 1m);
+        var t = new Ticker24h(Last: (decimal)last, Open: (decimal)open, High: 80000m, Low: 70000m,
+            ChangeAbs: (decimal)abs, ChangePercent: (decimal)pct, Volume: 1m);
         var c = DayStats.ChangeFromTicker(t);
         Assert.Equal((decimal)abs, c.Absolute);
         Assert.Equal((decimal)pct, Math.Round(c.Percent, 4));
@@ -155,7 +161,7 @@ public class IndicatorTests
             if (i == 3) low = 1m;            // outside the window
             if (i == 150) high = 90000m;     // inside
             if (i == 299) low = 50000m;      // the forming candle
-            candles.Add(new Candle(open, open + Five - TimeSpan.FromMilliseconds(1), 75000m, high, low, 75000m, 1m));
+            candles.Add(new Candle(open, 75000m, high, low, 75000m, 1m, IsClosed: i < 299));
         }
         var now = T0 + 299 * Five + TimeSpan.FromMinutes(3);
 
