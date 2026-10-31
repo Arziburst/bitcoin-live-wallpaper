@@ -115,7 +115,7 @@ jobs:
           ./scripts/pack.ps1 -Version $env:OLD_VERSION
           New-Item -ItemType Directory -Force installers/old | Out-Null
           Copy-Item bin/pack/releases/BLW_Installer.exe installers/old/
-          ./scripts/pack.ps1 -Version $env:OLD_VERSION  # DELIBERATE BREAK: both builds at the same version
+          ./scripts/pack.ps1 -Version $env:NEW_VERSION
           New-Item -ItemType Directory -Force installers/new | Out-Null
           Copy-Item bin/pack/releases/BLW_Installer.exe installers/new/
 
