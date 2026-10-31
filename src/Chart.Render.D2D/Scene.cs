@@ -24,9 +24,26 @@ public static class DayRangeMarkers
 /// <summary>One time-axis label as drawn: X = the label's centre (its tick) in physical px.</summary>
 public sealed record TimeAxisLabel(double X, string Text);
 
+public enum PriceAxisItemKind
+{
+    Level,
+    LastPrice,
+    DayHigh,
+    DayLow,
+}
+
+/// <summary>One thing drawn in the price-axis column, centred in it. Bounds in physical px: for a level label its
+/// text box (mono advance x length by the line height), for a tag its filled box.</summary>
+public sealed record PriceAxisItem(PriceAxisItemKind Kind, string Text, RectPx Bounds);
+
 /// <summary>What a frame shows, computed from the frame alone (like <see cref="DayRangeMarkers.For"/>).</summary>
 public static class FrameView
 {
+    /// <summary>What the price-axis column shows, top to bottom: the tick labels drawn and the tags (last price; 24h
+    /// high / low when on the scale and not hidden by the last-price tag).</summary>
+    public static IReadOnlyList<PriceAxisItem> PriceAxisItems(ChartFrame frame) =>
+        new Scene(frame).AxisItems.OrderBy(i => i.Bounds.Y).ToList();
+
     /// <summary>The labels drawn on the time axis, left to right.</summary>
     public static IReadOnlyList<TimeAxisLabel> TimeAxisLabels(ChartFrame frame) =>
         new Scene(frame).TimeLabels.Select(t => new TimeAxisLabel(t.X, t.Text)).ToList();
@@ -71,6 +88,7 @@ internal sealed class Scene
         TimeTicks = Interval >= LongInterval ? DayTicksFor(frame, FirstIndex, ShiftPx) : TimeTicksFor(frame, FirstIndex, ShiftPx);
         TimeLabels = TimeTicks.Where(LabelFits).ToList();
         EdgeMarkers = EdgeMarkersFor();
+        AxisItems = AxisItemsFor();
 
         if (Last is { } last)
         {
@@ -130,6 +148,14 @@ internal sealed class Scene
 
     public IReadOnlyList<DayRangeMarker> EdgeMarkers { get; }
 
+    /// <summary>The price-axis labels and tags, in drawing order: the labels, then the tags with the last price on top.</summary>
+    public IReadOnlyList<PriceAxisItem> AxisItems { get; }
+
+    /// <summary>A price tag's height and its text's padding on each side, in em of the axis label size.</summary>
+    public const double TagHeight = 1.55;
+
+    public const double TagPadding = 0.45;
+
     public string? Countdown { get; }
 
     /// <summary>JetBrains Mono advances every glyph by 0.6 em, so a marker's width is known without DirectWrite.</summary>
@@ -183,6 +209,62 @@ internal sealed class Scene
         }
 
         return markers;
+    }
+
+    // Every item centred in the price-axis column. Tags first: the last price and the 24h high / low; tick labels
+    // give way to them.
+    private List<PriceAxisItem> AxisItemsFor()
+    {
+        var axis = Layout.PriceAxis;
+        var size = Layout.Text.AxisLabelPx;
+        var centre = axis.X + (axis.Width / 2);
+        var tagHeight = TagHeight * size;
+
+        var tags = new List<(PriceAxisItemKind Kind, double Y, string Text)>();
+        if (Last is { } last)
+        {
+            tags.Add((PriceAxisItemKind.LastPrice, Scale.Y(last.Close), ChartText.Price(last.Close)));
+        }
+
+        if (DayHighLow is { } hl)
+        {
+            tags.Add((PriceAxisItemKind.DayHigh, Scale.Y(hl.High), ChartText.Price(hl.High)));
+            tags.Add((PriceAxisItemKind.DayLow, Scale.Y(hl.Low), ChartText.Price(hl.Low)));
+        }
+
+        tags.RemoveAll(tag => tag.Y < axis.Y || tag.Y > axis.Bottom);
+        if (tags.FindIndex(tag => tag.Kind == PriceAxisItemKind.LastPrice) is var at and >= 0)
+        {
+            // A 24h tag that would sit under the last-price tag is left out.
+            var (_, lastY, lastText) = tags[at];
+            tags.RemoveAll(tag => tag.Kind != PriceAxisItemKind.LastPrice && tag.Text != lastText && Math.Abs(tag.Y - lastY) < tagHeight);
+        }
+
+        var items = new List<PriceAxisItem>();
+        var format = PriceStep >= 1 ? "#,##0" : "#,##0.00";
+        var lineHeight = MonoLineHeight * size;
+        foreach (var level in PriceLevels)
+        {
+            var y = Scale.Y(level);
+            if (y < axis.Y + (0.6 * size) || y > axis.Bottom - (0.6 * size) ||
+                tags.Any(tag => Math.Abs(tag.Y - y) < tagHeight * 0.95))
+            {
+                continue;
+            }
+
+            var text = level.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
+            var width = text.Length * MonoAdvance * size;
+            items.Add(new PriceAxisItem(PriceAxisItemKind.Level, text, new RectPx(centre - (width / 2), y - (lineHeight / 2), width, lineHeight)));
+        }
+
+        // Drawn last, so the last-price tag lies on top of a 24h tag it touches.
+        foreach (var tag in Enumerable.Reverse(tags))
+        {
+            var width = Math.Ceiling((tag.Text.Length * MonoAdvance * size) + (2 * TagPadding * size));
+            items.Add(new PriceAxisItem(tag.Kind, tag.Text, new RectPx(centre - (width / 2), tag.Y - (tagHeight / 2), width, tagHeight)));
+        }
+
+        return items;
     }
 
     private static bool Intersects(RectPx a, RectPx b) =>

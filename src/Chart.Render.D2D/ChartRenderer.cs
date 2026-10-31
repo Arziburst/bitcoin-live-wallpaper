@@ -540,56 +540,34 @@ public sealed class ChartRenderer : IDisposable
 
     private void DrawPriceAxis(ID2D1RenderTarget target, Paint paint, Scene s)
     {
-        var l = s.Layout;
-        var axis = l.PriceAxis;
-        var size = l.Text.AxisLabelPx;
-        var pad = 0.45 * size;
-        var tagHeight = 1.55 * size;
+        var axis = s.Layout.PriceAxis;
+        var size = s.Layout.Text.AxisLabelPx;
 
-        // Tags first: the last price and the 24h high / low; tick labels give way to them.
-        var tags = new List<(double Y, string Text, ID2D1Brush Fill, ID2D1Brush Ink)>();
-        if (s.Last is { } last)
+        // Each label and tag centred in the column (Scene.AxisItems): the labels first, the tags over them.
+        target.AntialiasMode = AntialiasMode.PerPrimitive;
+        foreach (var item in s.AxisItems)
         {
-            var up = IsUp(last);
-            tags.Add((s.Scale.Y(last.Close), Price(last.Close), up ? paint.Up : paint.Down, paint.TagText));
-        }
-
-        if (s.DayHighLow is { } hl)
-        {
-            tags.Add((s.Scale.Y(hl.High), Price(hl.High), paint.DayTag, paint.Axis));
-            tags.Add((s.Scale.Y(hl.Low), Price(hl.Low), paint.DayTag, paint.Axis));
-        }
-
-        tags.RemoveAll(tag => tag.Y < axis.Y || tag.Y > axis.Bottom);
-        var lastTag = tags.Count > 0 && s.Last is not null ? tags[0] : default;
-        if (tags.Count > 1 && lastTag.Text is not null)
-        {
-            // A 24h tag that would sit under the last-price tag is left out.
-            tags.RemoveAll(tag => tag.Text != lastTag.Text && Math.Abs(tag.Y - lastTag.Y) < tagHeight && tag.Fill == paint.DayTag);
-        }
-
-        var format = s.PriceStep >= 1 ? "#,##0" : "#,##0.00";
-        foreach (var level in s.PriceLevels)
-        {
-            var y = s.Scale.Y(level);
-            if (y < axis.Y + (0.6 * size) || y > axis.Bottom - (0.6 * size) ||
-                tags.Any(tag => Math.Abs(tag.Y - y) < tagHeight * 0.95))
+            var b = item.Bounds;
+            var y = b.Y + (b.Height / 2);
+            if (item.Kind == PriceAxisItemKind.Level)
             {
+                var label = CachedLayout(item.Text, ChartFonts.Mono, FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
+                target.DrawTextLayout(
+                    new Vector2((float)(b.X + ((b.Width - label.Metrics.Width) / 2)), (float)(y - (label.Metrics.Height / 2))), label, paint.Axis);
                 continue;
             }
 
-            var text = CachedLayout(level.ToString(format, Invariant), ChartFonts.Mono, FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
-            target.DrawTextLayout(new Vector2((float)(axis.X + pad), (float)(y - (text.Metrics.Height / 2))), text, paint.Axis);
-        }
+            ID2D1Brush fill = paint.DayTag, ink = paint.Axis;
+            if (item.Kind == PriceAxisItemKind.LastPrice)
+            {
+                (fill, ink) = (s.Last is { } last && IsUp(last) ? paint.Up : paint.Down, paint.TagText);
+            }
 
-        target.AntialiasMode = AntialiasMode.PerPrimitive;
-        foreach (var tag in Enumerable.Reverse(tags))
-        {
-            var text = CachedLayout(tag.Text, ChartFonts.Mono, FontWeight.Medium, size, axis.Width, TextAlignment.Leading);
-            var top = tag.Y - (tagHeight / 2);
-            var rect = new System.Drawing.RectangleF((float)axis.X, (float)top, (float)Math.Min(axis.Width, text.Metrics.Width + (2 * pad)), (float)tagHeight);
-            target.FillRoundedRectangle(new RoundedRectangle(rect, (float)(0.16 * size), (float)(0.16 * size)), tag.Fill);
-            target.DrawTextLayout(new Vector2((float)(axis.X + pad), (float)(tag.Y - (text.Metrics.Height / 2))), text, tag.Ink);
+            var text = CachedLayout(item.Text, ChartFonts.Mono, FontWeight.Medium, size, axis.Width, TextAlignment.Leading);
+            var rect = new System.Drawing.RectangleF((float)b.X, (float)b.Y, (float)b.Width, (float)b.Height);
+            target.FillRoundedRectangle(new RoundedRectangle(rect, (float)(0.16 * size), (float)(0.16 * size)), fill);
+            target.DrawTextLayout(
+                new Vector2((float)(b.X + ((b.Width - text.Metrics.Width) / 2)), (float)(y - (text.Metrics.Height / 2))), text, ink);
         }
     }
 

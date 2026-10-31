@@ -4,7 +4,8 @@ namespace BitcoinWallpaper.Chart.Core.Layout;
 /// Pure: the same screen always gives the same layout.</summary>
 public static class LayoutEngine
 {
-    // The price axis keeps 1.5 % of the width from the right screen edge (D-30).
+    // The plot ends one label width short of 98.5 % of the screen width (D-30); the price-axis column runs from there
+    // to the screen edge, its labels and tags centred in it (owner 2026-10-31).
     private const double AxisRightShare = 0.985;
     private const double BodyShare = 0.62;
 
@@ -39,12 +40,12 @@ public static class LayoutEngine
         var tv = profile == DisplayProfile.Tv;
         var text = TextFor(h, tv);
 
-        // Horizontal: plot | price axis | margin. The plot starts at the screen's left edge: nothing is reserved for
-        // desktop icons (D-20), and the oldest candle may be cut there (D-30).
+        // Horizontal: plot | price axis. The plot starts at the screen's left edge: nothing is reserved for desktop
+        // icons (D-20), and the oldest candle may be cut there (D-30).
         const double plotX = 0;
-        var axisRight = Math.Round(AxisRightShare * w);
-        var axisWidth = Math.Ceiling(6.6 * text.AxisLabelPx); // "77,490.96" in mono plus padding
-        var plotWidth = axisRight - axisWidth - plotX;
+        var labelWidth = Math.Ceiling(6.6 * text.AxisLabelPx); // "77,490.96" in mono plus padding
+        var plotWidth = Math.Round(AxisRightShare * w) - labelWidth - plotX;
+        var axisWidth = w - (plotX + plotWidth);
 
         // Vertical: margin | plot | gap | volume | time axis | margin.
         var top = Math.Round(0.03 * h);
