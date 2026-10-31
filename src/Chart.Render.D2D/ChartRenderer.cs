@@ -17,11 +17,23 @@ public sealed class ChartRenderer : IDisposable
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
 
+    /// <summary>D2D1_DEFAULT_FLATTENING_TOLERANCE.</summary>
+    private const float DefaultFlatteningTolerance = 0.25f;
+
     private readonly IDWriteFactory5 dwrite;
     private readonly ChartFonts fonts;
     private readonly IDWriteTypography typography;
     private readonly IDWriteRenderingParams renderingParams;
     private readonly Dictionary<(string Family, FontWeight Weight, float Size), IDWriteTextFormat> formats = [];
+    private Dictionary<LayoutKey, IDWriteTextLayout> layouts = [];
+    private Dictionary<LayoutKey, IDWriteTextLayout> previousLayouts = [];
+
+    // GPU path only (D-6): long dotted/dashed lines and the settled part of the averages are tessellated once and
+    // kept as geometry realizations (device-dependent) instead of 120 times a second. The headless (WIC) path
+    // draws everything directly, so the golden images are unchanged.
+    private ID2D1DeviceContext1? realizedOn; // held, so a new context never reuses its address
+    private readonly Dictionary<(string Kind, float Length, float Width), ID2D1GeometryRealization> realizedLines = [];
+    private readonly RealizedAverage[] realizedAverages = [new(), new()];
 
     public ChartRenderer(IDWriteFactory5 dwrite, ChartFonts fonts)
     {
@@ -53,6 +65,7 @@ public sealed class ChartRenderer : IDisposable
 
         using var paint = new Paint(target);
         var scene = new Scene(frame);
+        AgeLayouts();
 
         DrawBackground(target, frame.Layout);
         DrawGrid(target, paint, scene);
@@ -78,6 +91,14 @@ public sealed class ChartRenderer : IDisposable
         }
 
         formats.Clear();
+        foreach (var layout in layouts.Values.Concat(previousLayouts.Values))
+        {
+            layout.Dispose();
+        }
+
+        layouts.Clear();
+        previousLayouts.Clear();
+        DropRealizations();
         renderingParams.Dispose();
         typography.Dispose();
     }
@@ -151,7 +172,13 @@ public sealed class ChartRenderer : IDisposable
         target.AntialiasMode = AntialiasMode.Aliased;
         var body = (float)l.CandleBodyWidthPx;
         var floor = (float)Math.Round(pane.Bottom);
-        for (var i = l.FirstDrawnIndex; i < candles.Count; i++)
+        var shifting = s.ShiftPx != 0;
+        if (shifting)
+        {
+            target.PushAxisAlignedClip(ToRect(pane), AntialiasMode.Aliased);
+        }
+
+        for (var i = s.FirstIndex; i < candles.Count; i++)
         {
             var c = candles[i];
             var height = (float)Math.Round((double)(c.Volume / max) * pane.Height * 0.92);
@@ -160,8 +187,13 @@ public sealed class ChartRenderer : IDisposable
                 continue;
             }
 
-            var x = SnapLeft(l.CandleCenterX(i), body);
+            var x = SnapLeft(s.CenterX(i), body);
             target.FillRectangle(new Rect(x, floor - height, body, height), IsUp(c) ? paint.VolumeUp : paint.VolumeDown);
+        }
+
+        if (shifting)
+        {
+            target.PopAxisAlignedClip();
         }
     }
 
@@ -188,6 +220,7 @@ public sealed class ChartRenderer : IDisposable
             [0.01f, 2.6f]);
         var labelSize = l.Text.AxisLabelPx * 0.82;
         target.AntialiasMode = AntialiasMode.PerPrimitive;
+        using var gpu = Gpu(target);
         foreach (var (price, name, above) in new[] { (hl.High, "24h high", true), (hl.Low, "24h low", false) })
         {
             if (!s.OnScale(price))
@@ -197,9 +230,19 @@ public sealed class ChartRenderer : IDisposable
 
             var y = s.Scale.Y(price);
             var yy = Snap(y) + 0.5f;
-            target.DrawLine(new Vector2((float)plot.X, yy), new Vector2((float)plot.Right, yy), paint.DayLine, width, dots);
+            if (gpu is not null)
+            {
+                var before = target.Transform;
+                target.Transform = Matrix3x2.CreateTranslation((float)plot.X, yy) * before;
+                gpu.DrawGeometryRealization(RealizedLine(gpu, "dots", (float)plot.Width, width, dots), paint.DayLine);
+                target.Transform = before;
+            }
+            else
+            {
+                target.DrawLine(new Vector2((float)plot.X, yy), new Vector2((float)plot.Right, yy), paint.DayLine, width, dots);
+            }
 
-            using var text = TextLayout(name, ChartFonts.Inter, FontWeight.Medium, labelSize, plot.Width, TextAlignment.Leading);
+            var text = CachedLayout(name, ChartFonts.Inter, FontWeight.Medium, labelSize, plot.Width, TextAlignment.Leading);
             var tw = text.Metrics.Width;
             var th = text.Metrics.Height;
             var pad = l.Text.AxisLabelPx * 0.6;
@@ -217,31 +260,39 @@ public sealed class ChartRenderer : IDisposable
         // Off the scale (D-11): a marker at the plot's edge, in the axis text style, in the dotted line's colour.
         foreach (var marker in s.EdgeMarkers)
         {
-            using var text = TextLayout(marker.Text, ChartFonts.Mono, FontWeight.Regular, s.MarkerSize, marker.Bounds.Width + s.MarkerSize, TextAlignment.Leading);
+            var text = CachedLayout(marker.Text, ChartFonts.Mono, FontWeight.Regular, s.MarkerSize, marker.Bounds.Width + s.MarkerSize, TextAlignment.Leading);
             target.DrawTextLayout(new Vector2((float)marker.Bounds.X, (float)marker.Bounds.Y), text, paint.DayLine);
         }
     }
 
-    private static void DrawAverages(ID2D1RenderTarget target, Paint paint, Scene s)
+    private void DrawAverages(ID2D1RenderTarget target, Paint paint, Scene s)
     {
         target.AntialiasMode = AntialiasMode.PerPrimitive;
         var width = LineWidth(s.Layout) * 1.5f;
         using var round = target.Factory.CreateStrokeStyle(
             new StrokeStyleProperties { LineJoin = LineJoin.Round, StartCap = CapStyle.Round, EndCap = CapStyle.Round });
+        using var gpu = Gpu(target);
+        var series = 0;
         foreach (var (values, brush) in new[] { (s.Ma50, paint.Ma50), (s.Ma20, paint.Ma20) })
         {
+            if (gpu is not null)
+            {
+                DrawRealizedAverage(target, gpu, realizedAverages[series++], values, brush, width, round, s);
+                continue;
+            }
+
             using var path = target.Factory.CreatePathGeometry();
             using (var sink = path.Open())
             {
                 var open = false;
-                for (var i = s.Layout.FirstDrawnIndex; i < values.Count; i++)
+                for (var i = s.FirstIndex; i < values.Count; i++)
                 {
                     if (values[i] is not { } v)
                     {
                         continue;
                     }
 
-                    var point = new Vector2((float)s.Layout.CandleCenterX(i), (float)s.Scale.Y(v));
+                    var point = new Vector2((float)s.CenterX(i), (float)s.Scale.Y(v));
                     if (!open)
                     {
                         sink.BeginFigure(point, FigureBegin.Hollow);
@@ -265,17 +316,78 @@ public sealed class ChartRenderer : IDisposable
         }
     }
 
+    // GPU path: everything up to the second-to-last point depends on closed candles only, so it is realized once
+    // and translated by the shift; the segment to the forming candle's value is drawn each frame (the round cap
+    // joins it like the round line join would).
+    private static void DrawRealizedAverage(
+        ID2D1RenderTarget target, ID2D1DeviceContext1 gpu, RealizedAverage cache, IReadOnlyList<decimal?> values,
+        ID2D1Brush brush, float width, ID2D1StrokeStyle round, Scene s)
+    {
+        var settled = values.Count - 1;
+        var l = s.Layout;
+        if (!cache.Matches(s.Scale, s.FirstIndex, l.CandleCenterX(s.FirstIndex), l.CandlePitchPx, width, values, settled))
+        {
+            cache.Clear();
+            using var path = gpu.Factory.CreatePathGeometry();
+            using (var sink = path.Open())
+            {
+                var open = false;
+                for (var i = s.FirstIndex; i < settled; i++)
+                {
+                    if (values[i] is not { } v)
+                    {
+                        continue;
+                    }
+
+                    var point = new Vector2((float)l.CandleCenterX(i), (float)s.Scale.Y(v));
+                    if (!open)
+                    {
+                        sink.BeginFigure(point, FigureBegin.Hollow);
+                        open = true;
+                    }
+                    else
+                    {
+                        sink.AddLine(point);
+                    }
+                }
+
+                if (open)
+                {
+                    sink.EndFigure(FigureEnd.Open);
+                }
+
+                sink.Close();
+            }
+
+            cache.Set(s.Scale, s.FirstIndex, l.CandleCenterX(s.FirstIndex), l.CandlePitchPx, width, values, settled,
+                gpu.CreateStrokedGeometryRealization(path, DefaultFlatteningTolerance, width, round));
+        }
+
+        var before = target.Transform;
+        target.Transform = Matrix3x2.CreateTranslation((float)s.ShiftPx, 0) * before;
+        gpu.DrawGeometryRealization(cache.Realization!, brush);
+        target.Transform = before;
+
+        if (settled >= 1 && settled - 1 >= s.FirstIndex && values[settled - 1] is { } a && values[settled] is { } b)
+        {
+            target.DrawLine(
+                new Vector2((float)s.CenterX(settled - 1), (float)s.Scale.Y(a)),
+                new Vector2((float)s.CenterX(settled), (float)s.Scale.Y(b)),
+                brush, width, round);
+        }
+    }
+
     private static void DrawCandles(ID2D1RenderTarget target, Paint paint, Scene s)
     {
         var l = s.Layout;
         target.AntialiasMode = AntialiasMode.Aliased;
         var body = (float)l.CandleBodyWidthPx;
         var wick = (float)l.WickWidthPx;
-        for (var i = l.FirstDrawnIndex; i < s.Candles.Count; i++)
+        for (var i = s.FirstIndex; i < s.Candles.Count; i++)
         {
             var c = s.Candles[i];
             var up = IsUp(c);
-            var center = l.CandleCenterX(i);
+            var center = s.CenterX(i);
 
             var high = Snap(s.Scale.Y(c.High));
             var low = Snap(s.Scale.Y(c.Low));
@@ -287,7 +399,7 @@ public sealed class ChartRenderer : IDisposable
         }
     }
 
-    private static void DrawLastPriceLine(ID2D1RenderTarget target, Paint paint, Scene s)
+    private void DrawLastPriceLine(ID2D1RenderTarget target, Paint paint, Scene s)
     {
         if (s.Last is not { } last)
         {
@@ -301,8 +413,18 @@ public sealed class ChartRenderer : IDisposable
             new StrokeStyleProperties { DashStyle = DashStyle.Custom }, [dash / width, dash / width]);
         var y = Snap(s.Scale.Y(last.Close)) + (width / 2);
         target.AntialiasMode = AntialiasMode.Aliased;
-        target.DrawLine(
-            new Vector2((float)plot.X, y), new Vector2((float)plot.Right, y), IsUp(last) ? paint.LastUp : paint.LastDown, width, dashed);
+        var brush = IsUp(last) ? paint.LastUp : paint.LastDown;
+        using var gpu = Gpu(target);
+        if (gpu is not null)
+        {
+            var before = target.Transform;
+            target.Transform = Matrix3x2.CreateTranslation((float)plot.X, y) * before;
+            gpu.DrawGeometryRealization(RealizedLine(gpu, "dashes", (float)plot.Width, width, dashed), brush);
+            target.Transform = before;
+            return;
+        }
+
+        target.DrawLine(new Vector2((float)plot.X, y), new Vector2((float)plot.Right, y), brush, width, dashed);
     }
 
     // ---- headline -----------------------------------------------------------------------------
@@ -351,10 +473,8 @@ public sealed class ChartRenderer : IDisposable
             caption += "  ·  delayed";
         }
 
-        using (var text = TextLayout(caption, ChartFonts.Inter, FontWeight.Medium, t.PairSourcePx, width, align))
-        {
-            DrawWithOpacity(target, paint.Axis, opacity, b => target.DrawTextLayout(new Vector2(x, (float)y), text, b));
-        }
+        var captionText = CachedLayout(caption, ChartFonts.Inter, FontWeight.Medium, t.PairSourcePx, width, align);
+        DrawWithOpacity(target, paint.Axis, opacity, b => target.DrawTextLayout(new Vector2(x, (float)y), captionText, b));
 
         y += 1.5 * t.PairSourcePx;
 
@@ -363,8 +483,11 @@ public sealed class ChartRenderer : IDisposable
         var price = s.Last?.Close ?? s.Frame.Ticker?.Last;
         if (price is { } p)
         {
-            using var text = TextLayout(Price(p), ChartFonts.Inter, FontWeight.SemiBold, t.HeadlinePricePx, width, align);
-            DrawWithOpacity(target, paint.Primary, opacity, b => target.DrawTextLayout(new Vector2(x, (float)(y - (0.08 * t.HeadlinePricePx))), text, b));
+            var text = CachedLayout(Price(p), ChartFonts.Inter, FontWeight.SemiBold, t.HeadlinePricePx, width, align);
+            using var pulsed = s.Frame.Pulse > 0
+                ? target.CreateSolidColorBrush(Mix(Palette.PrimaryText, s.Frame.PulseUp ? Palette.Up : Palette.Down, (float)Math.Min(1, s.Frame.Pulse)))
+                : null;
+            DrawWithOpacity(target, pulsed ?? paint.Primary, opacity, b => target.DrawTextLayout(new Vector2(x, (float)(y - (0.08 * t.HeadlinePricePx))), text, b));
         }
 
         y += 1.2 * t.HeadlinePricePx;
@@ -379,10 +502,8 @@ public sealed class ChartRenderer : IDisposable
         var changeText = string.Create(
             Invariant, $"{change.Absolute:+#,##0.00;−#,##0.00;0.00}   {change.Percent:+0.00;−0.00;0.00}%");
         var changeBrush = change.Absolute > 0 ? paint.Up : change.Absolute < 0 ? paint.Down : paint.Primary;
-        using (var text = TextLayout(changeText, ChartFonts.Inter, FontWeight.Medium, t.ChangePx, width, align))
-        {
-            DrawWithOpacity(target, changeBrush, opacity, b => target.DrawTextLayout(new Vector2(x, (float)y), text, b));
-        }
+        var changeLayout = CachedLayout(changeText, ChartFonts.Inter, FontWeight.Medium, t.ChangePx, width, align);
+        DrawWithOpacity(target, changeBrush, opacity, b => target.DrawTextLayout(new Vector2(x, (float)y), changeLayout, b));
 
         y += 1.45 * t.ChangePx;
 
@@ -450,14 +571,14 @@ public sealed class ChartRenderer : IDisposable
                 continue;
             }
 
-            using var text = TextLayout(level.ToString(format, Invariant), ChartFonts.Mono, FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
+            var text = CachedLayout(level.ToString(format, Invariant), ChartFonts.Mono, FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
             target.DrawTextLayout(new Vector2((float)(axis.X + pad), (float)(y - (text.Metrics.Height / 2))), text, paint.Axis);
         }
 
         target.AntialiasMode = AntialiasMode.PerPrimitive;
         foreach (var tag in Enumerable.Reverse(tags))
         {
-            using var text = TextLayout(tag.Text, ChartFonts.Mono, FontWeight.Medium, size, axis.Width, TextAlignment.Leading);
+            var text = CachedLayout(tag.Text, ChartFonts.Mono, FontWeight.Medium, size, axis.Width, TextAlignment.Leading);
             var top = tag.Y - (tagHeight / 2);
             var rect = new System.Drawing.RectangleF((float)axis.X, (float)top, (float)Math.Min(axis.Width, text.Metrics.Width + (2 * pad)), (float)tagHeight);
             target.FillRoundedRectangle(new RoundedRectangle(rect, (float)(0.16 * size), (float)(0.16 * size)), tag.Fill);
@@ -474,7 +595,7 @@ public sealed class ChartRenderer : IDisposable
             var label = tick.IsDay
                 ? tick.Local.ToString("d MMM", Invariant)
                 : tick.Local.ToString("HH:mm", Invariant);
-            using var text = TextLayout(label, ChartFonts.Mono, tick.IsDay ? FontWeight.Medium : FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
+            var text = CachedLayout(label, ChartFonts.Mono, tick.IsDay ? FontWeight.Medium : FontWeight.Regular, size, axis.Width, TextAlignment.Leading);
             var w = text.Metrics.Width;
             var x = tick.X - (w / 2);
             if (x < axis.X || x + w > axis.Right)
@@ -505,6 +626,91 @@ public sealed class ChartRenderer : IDisposable
         return layout;
     }
 
+    // A layout owned by the cache (the caller does not dispose it): labels repeat from frame to frame, and making
+    // them anew 120 times a second is most of a frame's CPU (D-6). Layouts unused for a whole frame are dropped.
+    private IDWriteTextLayout CachedLayout(string text, string family, FontWeight weight, double size, double maxWidth, TextAlignment align)
+    {
+        var key = new LayoutKey(text, family, weight, (float)size, (float)Math.Max(1, maxWidth), align);
+        if (layouts.TryGetValue(key, out var layout))
+        {
+            return layout;
+        }
+
+        if (previousLayouts.Remove(key, out layout))
+        {
+            layouts[key] = layout;
+            return layout;
+        }
+
+        layout = TextLayout(text, family, weight, size, maxWidth, align);
+        layouts[key] = layout;
+        return layout;
+    }
+
+    // The target as a GPU device context, or null (the headless path). A new context drops what was realized.
+    private ID2D1DeviceContext1? Gpu(ID2D1RenderTarget target)
+    {
+        var gpu = target.QueryInterfaceOrNull<ID2D1DeviceContext1>();
+        if (gpu is not null && realizedOn?.NativePointer != gpu.NativePointer)
+        {
+            DropRealizations();
+            realizedOn = gpu.QueryInterface<ID2D1DeviceContext1>();
+        }
+
+        return gpu;
+    }
+
+    private void DropRealizations()
+    {
+        foreach (var line in realizedLines.Values)
+        {
+            line.Dispose();
+        }
+
+        realizedLines.Clear();
+        foreach (var average in realizedAverages)
+        {
+            average.Clear();
+        }
+
+        realizedOn?.Dispose();
+        realizedOn = null;
+    }
+
+    // A horizontal line from (0, 0) to (length, 0) in the given stroke, realized once.
+    private ID2D1GeometryRealization RealizedLine(ID2D1DeviceContext1 gpu, string kind, float length, float width, ID2D1StrokeStyle style)
+    {
+        if (realizedLines.TryGetValue((kind, length, width), out var realized))
+        {
+            return realized;
+        }
+
+        using var line = gpu.Factory.CreatePathGeometry();
+        using (var sink = line.Open())
+        {
+            sink.BeginFigure(Vector2.Zero, FigureBegin.Hollow);
+            sink.AddLine(new Vector2(length, 0));
+            sink.EndFigure(FigureEnd.Open);
+            sink.Close();
+        }
+
+        realized = gpu.CreateStrokedGeometryRealization(line, DefaultFlatteningTolerance, width, style);
+        realizedLines[(kind, length, width)] = realized;
+        return realized;
+    }
+
+    // Called at the start of each frame: what the last frame did not use goes.
+    private void AgeLayouts()
+    {
+        foreach (var unused in previousLayouts.Values)
+        {
+            unused.Dispose();
+        }
+
+        previousLayouts.Clear();
+        (previousLayouts, layouts) = (layouts, previousLayouts);
+    }
+
     private static void DrawWithOpacity(ID2D1RenderTarget target, ID2D1SolidColorBrush brush, float opacity, Action<ID2D1Brush> draw)
     {
         var before = brush.Opacity;
@@ -514,6 +720,12 @@ public sealed class ChartRenderer : IDisposable
     }
 
     private static string Price(decimal price) => price.ToString("#,##0.00", Invariant);
+
+    private static Color4 Mix(Color4 from, Color4 to, float amount) => new(
+        from.R + ((to.R - from.R) * amount),
+        from.G + ((to.G - from.G) * amount),
+        from.B + ((to.B - from.B) * amount),
+        from.A + ((to.A - from.A) * amount));
 
     private static bool IsUp(Candle c) => c.Close >= c.Open;
 
@@ -528,6 +740,59 @@ public sealed class ChartRenderer : IDisposable
         a.X < b.Right && b.X < a.Right && a.Y < b.Bottom && b.Y < a.Bottom;
 
     private static Rect ToRect(RectPx r) => new((float)r.X, (float)r.Y, (float)r.Width, (float)r.Height);
+
+    /// <summary>One average's settled part as a geometry realization, and what it was built from.</summary>
+    private sealed class RealizedAverage
+    {
+        private PriceScale scale;
+        private int first;
+        private double firstX;
+        private double pitch;
+        private float width;
+        private decimal?[] values = [];
+
+        public ID2D1GeometryRealization? Realization { get; private set; }
+
+        public bool Matches(PriceScale scale, int first, double firstX, double pitch, float width, IReadOnlyList<decimal?> all, int settled)
+        {
+            if (Realization is null || scale != this.scale || first != this.first || firstX != this.firstX
+                || pitch != this.pitch || width != this.width || values.Length != Math.Max(0, settled - first))
+            {
+                return false;
+            }
+
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (values[i] != all[first + i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public void Set(PriceScale scale, int first, double firstX, double pitch, float width, IReadOnlyList<decimal?> all, int settled,
+            ID2D1GeometryRealization realization)
+        {
+            (this.scale, this.first, this.firstX, this.pitch, this.width) = (scale, first, firstX, pitch, width);
+            values = new decimal?[Math.Max(0, settled - first)];
+            for (var i = 0; i < values.Length; i++)
+            {
+                values[i] = all[first + i];
+            }
+
+            Realization = realization;
+        }
+
+        public void Clear()
+        {
+            Realization?.Dispose();
+            Realization = null;
+        }
+    }
+
+    private readonly record struct LayoutKey(string Text, string Family, FontWeight Weight, float Size, float MaxWidth, TextAlignment Align);
 
     /// <summary>The brushes of one draw, made on (and only valid for) that target.</summary>
     private sealed class Paint : IDisposable
