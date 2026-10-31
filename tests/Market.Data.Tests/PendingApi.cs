@@ -1,6 +1,6 @@
 // PENDING API (#3). Stubs only, so the red tests compile and fail with NotImplementedException.
-// The worker implements exactly these public types and signatures (Candle, MarketSource, CandleBuffer in
-// src/Chart.Core/Candles/; everything else in src/Market.Data/) and then DELETES this file and
+// The worker implements exactly these public types and signatures (Candle, MarketSource, Ticker24h,
+// CandleBuffer in src/Chart.Core/Candles/; everything else in src/Market.Data/) and then DELETES this file and
 // tests/Chart.Core.Tests/PendingApi.cs (the only test edit allowed; while a stub exists next to the real
 // type the build fails with CS0436, so it cannot be forgotten). Nothing here is behaviour the tests rely on.
 //
@@ -33,6 +33,17 @@ namespace BitcoinWallpaper.Chart.Core.Candles
         decimal Volume,
         bool IsClosed);
 
+    /// <summary>24 h ticker (in Chart.Core so the renderer can use it without Market.Data).
+    /// ChangeAbs = Last - Open; ChangePercent = ChangeAbs / Open * 100. Volume is the base-asset (BTC) volume.</summary>
+    public sealed record Ticker24h(
+        decimal Last,
+        decimal Open,
+        decimal High,
+        decimal Low,
+        decimal ChangeAbs,
+        decimal ChangePercent,
+        decimal Volume);
+
     public sealed class CandleBuffer
     {
         public const int DefaultCapacity = 1000;
@@ -56,17 +67,6 @@ namespace BitcoinWallpaper.Chart.Core.Candles
 namespace BitcoinWallpaper.Market.Data
 {
     using BitcoinWallpaper.Chart.Core.Candles;
-
-    /// <summary>24 h ticker. ChangeAbs = Last - Open; ChangePercent = ChangeAbs / Open * 100.
-    /// Volume is the base-asset (BTC) volume.</summary>
-    public sealed record Ticker24h(
-        decimal Last,
-        decimal Open,
-        decimal High,
-        decimal Low,
-        decimal ChangeAbs,
-        decimal ChangePercent,
-        decimal Volume);
 
     /// <summary>A parsed stream message.</summary>
     public abstract record MarketEvent;
