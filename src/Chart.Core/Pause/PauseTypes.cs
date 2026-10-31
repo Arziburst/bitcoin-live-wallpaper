@@ -31,8 +31,9 @@ public enum SessionState
 }
 
 /// <summary>One top-level window as the host sees it.</summary>
+/// <param name="Handle">The HWND, 0 when unknown: identifies the window across polls (NotificationGuard).</param>
 public sealed record WindowInfo(string ClassName, PixelRect Rect, bool IsZoomed = false,
-    bool IsMinimized = false, bool IsOurs = false, bool IsShell = false);
+    bool IsMinimized = false, bool IsOurs = false, bool IsShell = false, nint Handle = 0);
 
 /// <summary>What the host saw in one poll.</summary>
 /// <param name="Monitor">The active monitor: the one the wallpaper is drawn on.</param>
@@ -61,6 +62,12 @@ public enum PauseReason
     Fullscreen,
     ForegroundCovers,
     WindowsCover,
+
+    /// <summary>Busy or RunningD3DFullScreen, and one window covers most of the active monitor (NotificationGuard).</summary>
+    NotificationCorroborated,
+
+    /// <summary>Busy or RunningD3DFullScreen without such a window, inside NotificationGuard.UncorroboratedLimit.</summary>
+    NotificationUncorroborated,
 }
 
 public readonly record struct PauseVerdict(PlaybackState State, PauseReason Reason)
