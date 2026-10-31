@@ -15,8 +15,7 @@ internal readonly record struct PriceScale(double Top, double Height, double Max
     public static PriceScale For(
         ChartLayout layout,
         IReadOnlyList<Candle> candles,
-        IReadOnlyList<IReadOnlyList<decimal?>> overlays,
-        IEnumerable<decimal> optional)
+        IReadOnlyList<IReadOnlyList<decimal?>> overlays)
     {
         var plot = layout.Plot;
         double hi = double.MinValue, lo = double.MaxValue;
@@ -39,21 +38,8 @@ internal readonly record struct PriceScale(double Top, double Height, double Max
             return new PriceScale(plot.Y, plot.Height, 1, 0);
         }
 
-        // Lines that are near the candles (24h high / low) join the range; far ones are left out.
+        // The 24h high / low never stretch the scale (D-11): off it, they become edge markers.
         var range = Math.Max(hi - lo, Math.Max(hi * 0.001, 1e-6));
-        foreach (var p in optional.Select(p => (double)p))
-        {
-            if (p > hi && p - hi <= 0.3 * range)
-            {
-                hi = p;
-            }
-            else if (p < lo && lo - p <= 0.3 * range)
-            {
-                lo = p;
-            }
-        }
-
-        range = Math.Max(hi - lo, Math.Max(hi * 0.001, 1e-6));
         var max = hi + (0.07 * range);
         var min = lo - (0.07 * range);
 

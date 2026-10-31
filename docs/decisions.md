@@ -11,3 +11,5 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-7** (2026-10-31) Stack: native C#/.NET 10, Direct2D/DirectWrite on a DirectComposition flip-model swap chain; no browser engine.
 - **D-8** (2026-10-31) 5-minute candles.
 - **D-9** (2026-10-31) Before the live wallpaper is built, the chart is reviewed as static PNG mockups at 5120x1440 and 3840x2160.
+- **D-10** (2026-10-31) Every change on the chart (the forming candle, the new-bar shift, the price change) animates smoothly at the monitor's refresh rate (120 Hz on the desk monitor); nothing is drawn while nothing moves.
+- **D-11** (2026-10-31) A 24h high or low outside the visible price range is shown as an edge marker on the price scale; the scale is not stretched for it.

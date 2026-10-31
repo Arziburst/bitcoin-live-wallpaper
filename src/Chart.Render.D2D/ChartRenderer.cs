@@ -201,12 +201,12 @@ public sealed class ChartRenderer : IDisposable
         target.AntialiasMode = AntialiasMode.PerPrimitive;
         foreach (var (price, name, above) in new[] { (hl.High, "24h high", true), (hl.Low, "24h low", false) })
         {
-            var y = s.Scale.Y(price);
-            if (y < plot.Y || y > plot.Bottom)
+            if (!s.OnScale(price))
             {
                 continue;
             }
 
+            var y = s.Scale.Y(price);
             var yy = Snap(y) + 0.5f;
             target.DrawLine(new Vector2((float)plot.X, yy), new Vector2((float)plot.Right, yy), paint.DayLine, width, dots);
 
@@ -223,6 +223,13 @@ public sealed class ChartRenderer : IDisposable
             }
 
             target.DrawTextLayout(new Vector2((float)tx, (float)ty), text, paint.DayLabel);
+        }
+
+        // Off the scale (D-11): a marker at the plot's edge, in the axis text style, in the dotted line's colour.
+        foreach (var marker in s.EdgeMarkers)
+        {
+            using var text = TextLayout(marker.Text, ChartFonts.Mono, FontWeight.Regular, s.MarkerSize, marker.Bounds.Width + s.MarkerSize, TextAlignment.Leading);
+            target.DrawTextLayout(new Vector2((float)marker.Bounds.X, (float)marker.Bounds.Y), text, paint.DayLine);
         }
     }
 
@@ -532,95 +539,6 @@ public sealed class ChartRenderer : IDisposable
         a.X < b.Right && b.X < a.Right && a.Y < b.Bottom && b.Y < a.Bottom;
 
     private static Rect ToRect(RectPx r) => new((float)r.X, (float)r.Y, (float)r.Width, (float)r.Height);
-
-    /// <summary>What the frame derives to: computed once per draw from the frame alone.</summary>
-    private sealed class Scene
-    {
-        public Scene(ChartFrame frame)
-        {
-            Frame = frame;
-            Layout = frame.Layout;
-            Candles = frame.Candles;
-            Last = Candles.Count > 0 ? Candles[^1] : null;
-            Ma20 = MovingAverage.Simple(Candles, 20);
-            Ma50 = MovingAverage.Simple(Candles, 50);
-            DayHighLow = frame.Ticker is { } ticker
-                ? DayStats.HighLowFromTicker(ticker)
-                : Candles.Count > 0 ? DayStats.HighLowFromCandles(Candles, frame.Now) : null;
-            Base = frame.Pair.Split('/')[0];
-
-            var optional = DayHighLow is { } hl ? new[] { hl.High, hl.Low } : [];
-            Scale = PriceScale.For(Layout, Candles, [Ma20, Ma50], optional);
-            (PriceStep, PriceLevels) = Ticks.Prices(Scale, Layout.Text.AxisLabelPx * 4.5);
-            TimeTicks = TimeTicksFor(frame);
-
-            if (Last is { } last)
-            {
-                var close = last.IsClosed ? NextBoundary(frame.Now) : last.OpenTime + Interval;
-                Countdown = CloseCountdown.Text(close, frame.Now);
-            }
-        }
-
-        public ChartFrame Frame { get; }
-
-        public ChartLayout Layout { get; }
-
-        public IReadOnlyList<Candle> Candles { get; }
-
-        public Candle? Last { get; }
-
-        public IReadOnlyList<decimal?> Ma20 { get; }
-
-        public IReadOnlyList<decimal?> Ma50 { get; }
-
-        public HighLow? DayHighLow { get; }
-
-        public string Base { get; }
-
-        public PriceScale Scale { get; }
-
-        public double PriceStep { get; }
-
-        public IReadOnlyList<double> PriceLevels { get; }
-
-        public IReadOnlyList<TimeTick> TimeTicks { get; }
-
-        public string? Countdown { get; }
-
-        private static DateTimeOffset NextBoundary(DateTimeOffset now)
-        {
-            var ticks = now.UtcTicks - (now.UtcTicks % Interval.Ticks);
-            return new DateTimeOffset(ticks, TimeSpan.Zero) + Interval;
-        }
-
-        // A tick on every candle (and every future slot right of the newest) whose local time is a whole interval.
-        private static List<TimeTick> TimeTicksFor(ChartFrame frame)
-        {
-            var l = frame.Layout;
-            var ticks = new List<TimeTick>();
-            if (frame.Candles.Count == 0)
-            {
-                return ticks;
-            }
-
-            var minutes = Ticks.TimeIntervalMinutes(l.CandlePitchPx, 6.6 * l.Text.AxisLabelPx);
-            var last = frame.Candles[^1].OpenTime;
-            for (var i = l.FirstDrawnIndex; i < frame.Candles.Count + l.RightOffsetBars; i++)
-            {
-                var open = i < frame.Candles.Count ? frame.Candles[i].OpenTime : last + ((i - frame.Candles.Count + 1) * Interval);
-                var local = TimeZoneInfo.ConvertTime(open, frame.TimeZone);
-                var minuteOfDay = (local.Hour * 60) + local.Minute;
-                if (minuteOfDay % minutes == 0)
-                {
-                    ticks.Add(new TimeTick(l.CandleCenterX(i), local, minuteOfDay == 0));
-                }
-            }
-
-            return ticks;
-        }
-    }
-
-    private readonly record struct TimeTick(double X, DateTimeOffset Local, bool IsDay);
 
     /// <summary>The brushes of one draw, made on (and only valid for) that target.</summary>
     private sealed class Paint : IDisposable
