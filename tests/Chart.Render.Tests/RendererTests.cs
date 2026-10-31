@@ -48,19 +48,28 @@ public class RendererTests(RendererFixture fx)
         Assert.True(differing is null, $"pixel {differing} outside the headline {box} changed with the time");
     }
 
+    // D-20 (#18): replaces "Nothing_but_the_background_is_drawn_in_the_icon_safe_area". Nothing is reserved for
+    // icons: the chart is drawn in the left 8 % that used to be bare; only the margin left of the plot stays bare.
     [Theory]
     [InlineData(Desk)]
     [InlineData(Tv)]
-    public void Nothing_but_the_background_is_drawn_in_the_icon_safe_area(string fileName)
+    public void The_chart_reaches_the_left_margin_nothing_is_reserved_for_icons(string fileName)
     {
         var frame = fx.Frame(fileName);
         var full = fx.Renderer.Render(frame);
         var empty = fx.Renderer.Render(ChartFrame.Create(
             frame.Layout.WidthPx, frame.Layout.HeightPx, frame.Layout.DpiScale, [], null, frame.Now, frame.TimeZone));
 
-        var safe = frame.Layout.IconSafeArea;
-        var differing = Differing(full, empty, (x, _) => x < Math.Floor(safe.Right));
-        Assert.True(differing is null, $"pixel {differing} in the icon safe area {safe} differs from the bare background");
+        var plot = frame.Layout.Plot;
+        var w = frame.Layout.WidthPx;
+        Assert.True(plot.X <= 0.01 * w, $"plot starts at {plot.X}, expected the left margin (<= {0.01 * w})");
+
+        var formerSafeArea = Math.Floor(0.08 * w);
+        var drawn = Differing(full, empty, (x, y) => x < formerSafeArea && y >= plot.Y && y < plot.Bottom);
+        Assert.True(drawn is not null, $"nothing of the chart is drawn left of x = {formerSafeArea} (the former icon safe area)");
+
+        var margin = Differing(full, empty, (x, _) => x < Math.Floor(plot.X));
+        Assert.True(margin is null, $"pixel {margin} left of the plot {plot} differs from the bare background");
     }
 
     [Fact]

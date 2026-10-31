@@ -11,7 +11,7 @@ public class MotionRenderTests(RendererFixture fx)
     private const string Tv = "btc-3840x2160.png";
 
     [Fact]
-    public void A_shift_moves_the_series_but_not_the_price_axis_nor_into_the_icon_area()
+    public void A_shift_moves_the_series_but_not_the_price_axis_nor_left_of_the_plot()
     {
         var frame = fx.Frame(Tv);
         var still = fx.Renderer.Render(frame);
@@ -27,9 +27,10 @@ public class MotionRenderTests(RendererFixture fx)
 
         var empty = fx.Renderer.Render(ChartFrame.Create(
             frame.Layout.WidthPx, frame.Layout.HeightPx, frame.Layout.DpiScale, [], null, frame.Now, frame.TimeZone));
-        var safe = frame.Layout.IconSafeArea;
-        var inSafe = Differing(shifted, empty, (x, _) => x < Math.Floor(safe.Right));
-        Assert.True(inSafe is null, $"pixel {inSafe} in the icon safe area {safe} differs from the bare background while shifting");
+        // D-20 (#18): was "the icon safe area (x < IconSafeArea.Right, = Plot.X before D-20) stays bare background";
+        // now the margin left of the plot stays bare.
+        var left = Differing(shifted, empty, (x, _) => x < Math.Floor(plot.X));
+        Assert.True(left is null, $"pixel {left} left of the plot {plot} differs from the bare background while shifting");
     }
 
     [Fact]

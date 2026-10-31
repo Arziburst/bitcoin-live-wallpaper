@@ -96,14 +96,15 @@ public class EdgeMarkerTests(RendererFixture fx)
             $"the 24h low marker {low} is not at the plot's bottom edge {plot}");
     }
 
+    // D-20 (#18): was "..._and_outside_the_icon_safe_area" with the assertion b.X >= IconSafeArea.Right, removed:
+    // there is no icon safe area any more.
     [Theory]
     [InlineData(Desk)]
     [InlineData(Tv)]
-    public void Marker_bounds_are_inside_the_plot_and_outside_the_icon_safe_area(string fileName)
+    public void Marker_bounds_are_inside_the_plot(string fileName)
     {
         var frame = fx.Frame(fileName);
         var plot = frame.Layout.Plot;
-        var safe = frame.Layout.IconSafeArea;
         var markers = DayRangeMarkers.For(OffScale(frame));
         Assert.Equal(2, markers.Count);
 
@@ -113,24 +114,29 @@ public class EdgeMarkerTests(RendererFixture fx)
             Assert.True(b.Width > 0 && b.Height > 0, $"{marker.Extreme} marker has empty bounds {b}");
             Assert.True(b.X >= plot.X && b.Right <= plot.Right && b.Y >= plot.Y && b.Bottom <= plot.Bottom,
                 $"{marker.Extreme} marker {b} is not inside the plot {plot}");
-            Assert.True(b.X >= safe.Right,
-                $"{marker.Extreme} marker {b} reaches into the icon safe area {safe}");
         }
     }
 
+    // D-20 (#18): replaces "With_off_scale_markers_the_icon_safe_area_is_still_bare_background". The low marker
+    // (bottom-left, never under the headline) sits at the plot's left margin, inside the former 8 % icon area;
+    // only the margin left of the plot stays bare.
     [Theory]
     [InlineData(Desk)]
     [InlineData(Tv)]
-    public void With_off_scale_markers_the_icon_safe_area_is_still_bare_background(string fileName)
+    public void With_off_scale_markers_the_low_marker_sits_at_the_left_margin_and_left_of_the_plot_is_bare(string fileName)
     {
         var frame = OffScale(fx.Frame(fileName));
+        var w = frame.Layout.WidthPx;
+        var low = Assert.Single(DayRangeMarkers.For(frame), m => m.Extreme == DayExtreme.Low).Bounds;
+        Assert.True(low.X < 0.08 * w, $"the 24h low marker {low} starts right of the former icon safe area (x >= {0.08 * w})");
+
         var full = fx.Renderer.Render(frame);
         var empty = fx.Renderer.Render(ChartFrame.Create(
             frame.Layout.WidthPx, frame.Layout.HeightPx, frame.Layout.DpiScale, [], null, frame.Now, frame.TimeZone));
 
-        var safe = frame.Layout.IconSafeArea;
-        var differing = FirstDiffering(full, empty, (x, _) => x < Math.Floor(safe.Right));
-        Assert.True(differing is null, $"pixel {differing} in the icon safe area {safe} differs from the bare background");
+        var plot = frame.Layout.Plot;
+        var differing = FirstDiffering(full, empty, (x, _) => x < Math.Floor(plot.X));
+        Assert.True(differing is null, $"pixel {differing} left of the plot {plot} differs from the bare background");
     }
 
     [Theory]

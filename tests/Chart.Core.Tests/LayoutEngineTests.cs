@@ -1,4 +1,7 @@
 // Contract #4, criteria 1 and 2: the layout engine.
+// Contract #18 (D-20): the content spans the full screen width; nothing is reserved for desktop icons any more.
+// The tests that asserted the left 8 % icon safe area now assert that the plot starts at the left margin
+// (<= 1 % of the width); IconSafeArea is no longer read by these tests (the worker may drop it).
 //
 // API these tests need (the worker implements it as written, in src/Chart.Core/Layout/):
 //
@@ -21,7 +24,7 @@
 //       RectPx TimeAxis;      // time labels, under the volume pane
 //       RectPx VolumePane;    // volume bars, directly under the plot, same x-range as the plot
 //       RectPx Headline;      // price, 24h change, H/L/volume row, pair + source
-//       RectPx IconSafeArea;  // left 8 % of the width, full height
+//       (IconSafeArea: dropped from the sketch by D-20 / #18; no test reads it)
 //       TextSizes Text;
 //       double CandlePitchPx;      // slot width per candle
 //       double CandleBodyWidthPx;  // ~62 % of the pitch
@@ -46,7 +49,7 @@
 //   }
 //
 // Where the spec gives a percentage the tests use a tolerance; where it leaves freedom they check
-// invariants (inside the screen, no overlap, nothing but the chart body in the icon safe area,
+// invariants (inside the screen, no overlap, the plot from the left margin to the price axis,
 // readable text) instead of exact positions.
 
 using BitcoinWallpaper.Chart.Core.Layout;
@@ -131,26 +134,17 @@ public class LayoutEngineTests
         }
     }
 
+    // D-20 (#18): replaces "Icon_safe_area_is_the_left_8_percent_full_height" and
+    // "Nothing_but_the_chart_body_enters_the_icon_safe_area": there is no icon safe area any more.
     [Theory]
     [MemberData(nameof(Screens))]
-    public void Icon_safe_area_is_the_left_8_percent_full_height(int w, int h, double s)
-    {
-        var a = Layout(w, h, s).IconSafeArea;
-        Assert.Equal(0, a.X, 1);
-        Assert.Equal(0, a.Y, 1);
-        Assert.True(Math.Abs(a.Width - 0.08 * w) <= 1, $"safe area width {a.Width}, expected {0.08 * w}");
-        Assert.True(Math.Abs(a.Height - h) <= 1, $"safe area height {a.Height}, expected {h}");
-    }
-
-    [Theory]
-    [MemberData(nameof(Screens))]
-    public void Nothing_but_the_chart_body_enters_the_icon_safe_area(int w, int h, double s)
+    public void Plot_starts_at_the_left_margin_nothing_is_reserved_for_icons(int w, int h, double s)
     {
         var l = Layout(w, h, s);
-        // Plot and VolumePane are the chart body and may extend under it unlabelled; text may not.
-        Assert.False(Overlaps(l.PriceAxis, l.IconSafeArea), $"price axis {l.PriceAxis} in the safe area");
-        Assert.False(Overlaps(l.TimeAxis, l.IconSafeArea), $"time axis {l.TimeAxis} in the safe area");
-        Assert.False(Overlaps(l.Headline, l.IconSafeArea), $"headline {l.Headline} in the safe area");
+        Assert.True(l.Plot.X >= -0.5 && l.Plot.X <= 0.01 * w,
+            $"plot starts at {l.Plot.X}, expected the left margin (<= 1 % of {w} = {0.01 * w})");
+        Assert.True(Math.Abs(l.VolumePane.X - l.Plot.X) <= 1, $"volume pane {l.VolumePane} does not start with the plot {l.Plot}");
+        Assert.True(Math.Abs(l.TimeAxis.X - l.Plot.X) <= 1, $"time axis {l.TimeAxis} does not start with the plot {l.Plot}");
     }
 
     [Theory]
@@ -216,11 +210,12 @@ public class LayoutEngineTests
     }
 
     [Fact]
-    public void Ultrawide_32_9_chart_spans_8_to_97_percent_with_headline_top_right()
+    public void Ultrawide_32_9_chart_spans_the_left_margin_to_97_percent_with_headline_top_right()
     {
         const int w = 5120, h = 1440;
         var l = Layout(w, h, 1.75);
-        Assert.True(Math.Abs(l.Plot.X - 0.08 * w) <= 0.005 * w, $"plot starts at {l.Plot.X}, expected ~{0.08 * w}");
+        // D-20 (#18): was "plot starts at ~8 % (±0.5 %)".
+        Assert.True(l.Plot.X >= -0.5 && l.Plot.X <= 0.01 * w, $"plot starts at {l.Plot.X}, expected the left margin (<= {0.01 * w})");
         Assert.InRange(Right(l.PriceAxis), 0.96 * w, 0.98 * w);
         Assert.True(l.Headline.X >= w / 2.0, $"headline {l.Headline} not on the right");
         Assert.True(l.Headline.Y <= 0.06 * h, $"headline {l.Headline} not at the top");
@@ -432,6 +427,6 @@ public class LayoutEngineTests
     private static IEnumerable<(string, RectPx)> Rects(ChartLayout l) =>
     [
         ("Plot", l.Plot), ("PriceAxis", l.PriceAxis), ("TimeAxis", l.TimeAxis),
-        ("VolumePane", l.VolumePane), ("Headline", l.Headline), ("IconSafeArea", l.IconSafeArea),
+        ("VolumePane", l.VolumePane), ("Headline", l.Headline),
     ];
 }
