@@ -24,3 +24,4 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-32** (2026-10-31) The price-axis block (price labels and price tags) is centred between the newest candle and the right screen edge; this replaces D-30's "small margin from the right screen edge".
 - **D-33** (2026-10-31) The installer file is named BLW_Installer.exe.
 - **D-21** (2026-10-31) A screensaver mode - the same live chart full-screen on top of everything (no desktop icons), closing on mouse/keyboard input like any screensaver; a tray check mark "Use as screensaver": on sets this app as the Windows screensaver for the current user (the timeout stays the Windows setting), off restores the previous screensaver; uninstall restores it too.
+- **D-36** (2026-10-31) A new installer updates the program when it is already installed; the user's settings are kept.

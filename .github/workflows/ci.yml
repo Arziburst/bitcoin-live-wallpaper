@@ -89,3 +89,54 @@ jobs:
           name: LockScreenProbe
           path: probe/LockScreenProbe.exe
           if-no-files-found: error
+
+  # D-36 (#43): a new installer updates an installed copy. On the runner only: installs 0.1.0 (a local build's
+  # version, what an older installer gave), then this run's 0.1.<run_number> over it, and checks the version, the
+  # user's files and one install folder (scripts/install-over-test.ps1).
+  install-over:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      OLD_VERSION: 0.1.0
+      NEW_VERSION: 0.1.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET (global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Pack the old and the new installer
+        shell: pwsh
+        run: |
+          ./scripts/pack.ps1 -Version $env:OLD_VERSION
+          New-Item -ItemType Directory -Force installers/old | Out-Null
+          Copy-Item bin/pack/releases/BLW_Installer.exe installers/old/
+          ./scripts/pack.ps1 -Version $env:NEW_VERSION
+          New-Item -ItemType Directory -Force installers/new | Out-Null
+          Copy-Item bin/pack/releases/BLW_Installer.exe installers/new/
+
+      - name: Install the old one, then the new one over it
+        shell: pwsh
+        timeout-minutes: 10
+        run: ./scripts/install-over-test.ps1 -OldInstaller installers/old/BLW_Installer.exe -NewInstaller installers/new/BLW_Installer.exe -NewVersion $env:NEW_VERSION
+
+      - name: Stop leftover processes
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($image in 'BitcoinWallpaper.exe', 'BitcoinWallpaper.scr', 'BLW_Installer.exe', 'Update.exe') {
+            taskkill.exe /F /T /IM $image 2>&1 | Out-Null
+          }
+          exit 0
+
+      - name: Upload Setup and app logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-over-logs
+          path: install-over-logs/
+          if-no-files-found: ignore
