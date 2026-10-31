@@ -1,0 +1,1 @@
+{"method":"subscribe","result":{"channel":"ohlc","interval":5,"snapshot":true,"symbol":"BTC/USD"},"success":true,"time_in":"2026-10-31T02:05:16.412887Z","time_out":"2026-10-31T02:05:16.413064Z"}
