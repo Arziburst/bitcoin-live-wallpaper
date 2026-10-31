@@ -1,6 +1,7 @@
 # D-36 install-over check, for the CI runner only (it installs the app for the current user; never run it on a PC
 # you use). Installs -OldInstaller silently, starts the app, writes sample user files, then installs -NewInstaller
-# silently over it, and checks: the installed version is -NewVersion, the user files are unchanged, one install folder,
+# silently over it, and checks: the installed version is -NewVersion, the user files (settings.json, screensaver.json,
+# future.json, logsold.log, lockoriginal.jpg) are unchanged, the app log names the restore, one install folder,
 # and the Velopack hooks' results (Run value, Desktop shortcut, BitcoinWallpaper.scr). Every leftover process is stopped
 # at the end. Exits non-zero when any check fails.
 #
@@ -65,6 +66,19 @@ try {
     $screensaverText = "{`n  `"version`": 1,`n  `"SCRNSAVE.EXE`": `"C:\\Windows\\system32\\Mystify.scr`",`n  `"ScreenSaveActive`": `"1`"`n}"
     Set-Content -NoNewline -Path $settings -Value $settingsText
     Set-Content -NoNewline -Path $screensaver -Value $screensaverText
+    # Files a later version may add (any *.json, more in logs\ and lock\) must survive too.
+    $future = Join-Path $root 'future.json'
+    $futureText = '{"addedBy":"a later version","n":42}'
+    Set-Content -NoNewline -Path $future -Value $futureText
+    $oldLog = Join-Path $root 'logs\old.log'
+    $oldLogText = "2026-10-31 00:00:00.000 [1] INFO  install-over-test sample line"
+    New-Item -ItemType Directory -Force (Split-Path $oldLog) | Out-Null
+    Set-Content -NoNewline -Path $oldLog -Value $oldLogText
+    $lockImage = Join-Path $root 'lock\original.jpg'
+    New-Item -ItemType Directory -Force (Split-Path $lockImage) | Out-Null
+    $lockBytes = [byte[]](0xFF, 0xD8, 0xFF, 0xE0) + [System.Text.Encoding]::ASCII.GetBytes('install-over-test') + [byte[]](0, 1, 2, 254, 255, 0xFF, 0xD9)
+    [System.IO.File]::WriteAllBytes($lockImage, $lockBytes)
+    $lockHash = (Get-FileHash $lockImage).Hash
     Check 'old install: first-run.done written by the install hook' (Test-Path $marker)
 
     Install $NewInstaller 'new'
@@ -78,6 +92,11 @@ try {
     Check 'settings.json kept' ((Test-Path $settings) -and (Get-Content -Raw $settings) -eq $settingsText)
     Check 'screensaver.json kept' ((Test-Path $screensaver) -and (Get-Content -Raw $screensaver) -eq $screensaverText)
     Check 'first-run.done kept' (Test-Path $marker)
+    Check 'future.json kept' ((Test-Path $future) -and (Get-Content -Raw $future) -eq $futureText)
+    Check 'logs\old.log kept' ((Test-Path $oldLog) -and (Get-Content -Raw $oldLog) -eq $oldLogText)
+    Check 'lock\original.jpg kept' ((Test-Path $lockImage) -and (Get-FileHash $lockImage).Hash -eq $lockHash)
+    $appLog = Join-Path $root 'logs\wallpaper.log'
+    Check 'app log names the restore' ((Test-Path $appLog) -and (Select-String -Quiet -SimpleMatch -Path $appLog 'install over a previous install'))
 
     $folders = @(Get-ChildItem $env:LOCALAPPDATA -Directory -Filter 'BitcoinWallpaper*')
     Check 'one install folder' ($folders.Count -eq 1) "(found: $($folders.Name -join ', '))"

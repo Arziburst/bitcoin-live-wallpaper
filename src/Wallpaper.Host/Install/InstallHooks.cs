@@ -26,9 +26,39 @@ internal static class InstallHooks
     {
         // D-36: a new installer over an existing install; first, so the restored first-run marker keeps autostart off
         // when the user turned it off.
-        Try(() => PreviousInstallData.Restore(DataFolder.Path));
+        Try(RestorePreviousInstallData);
         Try(() => CurrentAutostart().OnStartup());
         Try(ScreensaverFile.Write);
+    }
+
+    /// <summary>D-36: the user's files back from the previous install; what was restored and what failed goes to the log.</summary>
+    private static void RestorePreviousInstallData()
+    {
+        var result = PreviousInstallData.Restore(DataFolder.Path);
+        if (result.From is null)
+        {
+            return;
+        }
+
+        Log.Open(canRoll: false);
+        try
+        {
+            Log.Info($"install over a previous install: {result.Restored.Count} file(s) restored from {result.From}, " +
+                     $"{result.Failed.Count} failed");
+            foreach (var file in result.Restored)
+            {
+                Log.Info($"restored {file}");
+            }
+
+            foreach (var failure in result.Failed)
+            {
+                Log.Warn($"could not restore {failure}");
+            }
+        }
+        finally
+        {
+            Log.Close();
+        }
     }
 
     public static void AfterUpdate()
