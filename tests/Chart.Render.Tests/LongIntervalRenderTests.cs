@@ -45,6 +45,9 @@
 //   of the forming candle (OpenTime + Interval) or, when the newest candle is closed, to the next interval
 //   boundary (aligned to the Unix epoch, UTC: 6h -> 00/06/12/18). Interval < 1 hour: "closes in mm:ss" as today.
 // - The caption names the frame's interval, never "5m" for a 4h frame.
+// - D-29 (owner 2026-10-31): the interval stays the 30-day one, but the chart fills every drawable slot with the
+//   history it has: drawn = min(candles, CandleSlots - RightOffsetBars), the oldest drawn candle at the plot's
+//   left edge (desk ~48 days of 4h); with less history (Kraken 6h: 120) all of it is drawn, anchored right.
 
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -137,6 +140,42 @@ public class LongIntervalRenderTests(RendererFixture fx)
         Assert.Equal(count, frame.Layout.DrawnCandleCount);
         var image = fx.Renderer.Render(frame);
         Assert.Equal((w, h), (image.Width, image.Height));
+    }
+
+    // ---- D-29: the chart fills the drawable slots ----------------------------------------------
+
+    [Theory]
+    [MemberData(nameof(OwnerScreens))]
+    public void With_more_history_than_30_days_the_chart_fills_every_drawable_slot(int w, int h, double s, double hours, int thirtyDays)
+    {
+        var interval = TimeSpan.FromHours(hours);
+        var candles = Series(interval, NewestOpen, 1000);
+        var frame = ChartFrame.Create(w, h, s, candles, TickerFor(candles), NewestOpen.AddMinutes(47), TimeZoneInfo.Utc, interval: interval);
+        var l = frame.Layout;
+
+        Assert.Equal(l.CandleSlots - l.RightOffsetBars, l.DrawnCandleCount);
+        Assert.True(l.DrawnCandleCount > thirtyDays, $"{l.DrawnCandleCount} candles drawn, no more than the 30 days ({thirtyDays})");
+        Assert.Equal(1000 - l.DrawnCandleCount, l.FirstDrawnIndex);
+        var oldestLeft = l.CandleCenterX(l.FirstDrawnIndex) - (l.CandlePitchPx / 2);
+        Assert.True(oldestLeft >= l.Plot.X - 1 && oldestLeft - l.Plot.X < l.CandlePitchPx,
+            $"the oldest drawn candle starts at {oldestLeft}, the plot at {l.Plot.X}: the slots are not filled from the left");
+        Assert.True(candles[^1].OpenTime - candles[l.FirstDrawnIndex].OpenTime > TimeSpan.FromDays(30),
+            "the drawn span is not longer than 30 days");
+    }
+
+    [Fact]
+    public void With_only_the_kraken_6h_history_all_of_it_is_drawn_anchored_right()
+    {
+        // Kraken: 720 hourly rows -> 120 candles of 6h, fewer than the TV's drawable slots.
+        var candles = Series(SixHours, NewestOpen, 120);
+        var frame = ChartFrame.Create(3840, 2160, 1.0, candles, TickerFor(candles), NewestOpen.AddMinutes(47), TimeZoneInfo.Utc, interval: SixHours);
+        var l = frame.Layout;
+
+        Assert.True(l.CandleSlots - l.RightOffsetBars > 120, $"the TV has {l.CandleSlots - l.RightOffsetBars} drawable slots");
+        Assert.Equal(120, l.DrawnCandleCount);
+        Assert.Equal(0, l.FirstDrawnIndex);
+        var expected = l.Plot.Right - ((l.RightOffsetBars + 0.5) * l.CandlePitchPx);
+        Assert.True(Math.Abs(l.CandleCenterX(119) - expected) <= 1, $"newest candle at {l.CandleCenterX(119)}, expected {expected}");
     }
 
     // ---- time axis: days ------------------------------------------------------------------------
@@ -320,6 +359,9 @@ public class LongIntervalRenderTests(RendererFixture fx)
         var thirtyDays = IntervalPolicy.CandleCount(IntervalPolicy.DefaultPeriod, interval);
         Assert.True(frame.Layout.DrawnCandleCount >= thirtyDays,
             $"{fileName}: {frame.Layout.DrawnCandleCount} candles drawn, 30 days of {interval} are {thirtyDays}");
+
+        // D-29: the recorded Binance history is long enough to fill every drawable slot.
+        Assert.Equal(frame.Layout.CandleSlots - frame.Layout.RightOffsetBars, frame.Layout.DrawnCandleCount);
         Assert.All(FrameView.TimeAxisLabels(frame), label => Assert.Matches(DayLabel, label.Text));
     }
 }

@@ -223,14 +223,17 @@ public class LayoutEngineTests
         Assert.True(toAxis >= -0.5 && toAxis <= 0.05 * w, $"headline {l.Headline} not top-right next to axis {l.PriceAxis}");
     }
 
+    // D-20 (#18, owner 2026-10-31): was "..._at_10_percent" with |Headline.X - 10 % W| <= 1 % W; the headline now
+    // sits at the left margin.
     [Theory]
     [InlineData(3840, 2160, 1.0)]
     [InlineData(3840, 2160, 1.5)]
     [InlineData(1920, 1080, 1.0)]
-    public void Wide_16_9_headline_is_top_left_at_10_percent(int w, int h, double s)
+    public void Wide_16_9_headline_is_top_left_at_the_left_margin(int w, int h, double s)
     {
         var l = Layout(w, h, s);
-        Assert.True(Math.Abs(l.Headline.X - 0.10 * w) <= 0.01 * w, $"headline x {l.Headline.X}, expected ~{0.10 * w}");
+        Assert.True(l.Headline.X >= -0.5 && l.Headline.X <= 0.02 * w,
+            $"headline x {l.Headline.X}, expected the left margin (<= 2 % of {w} = {0.02 * w})");
         Assert.True(l.Headline.Y <= 0.08 * h, $"headline {l.Headline} not at the top");
     }
 

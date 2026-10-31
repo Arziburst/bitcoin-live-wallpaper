@@ -30,7 +30,13 @@
 //
 // Requests per interval (the tests read them from the fake transport):
 //   Binance REST  .../api/v3/klines?symbol=BTCUSDT&interval=<code>&limit=<n>, ceil(30 d / interval) <= n <= 1000;
+//                 D-29 (owner 2026-10-31): the chart fills all drawable slots with older history, so n is also >=
+//                 the CandleSlots of every screen whose IntervalPolicy.ForScreen interval is this one (1000, the
+//                 Binance maximum, satisfies it for every screen tested);
 //                 polls (REST fallback) .../klines?...&interval=<code>&limit=2.
+//   Kraken        serves at most the newest 720 rows: 4h (native 240) -> 720 candles (120 days, fills any slots);
+//                 6h (from 60) -> 720 hours -> 120 6h candles (119 when the oldest bucket is partial), i.e. 30
+//                 days: fewer than the TV's ~133 drawable slots, so on Kraken the TV chart does not quite fill.
 //   Binance WS    SUBSCRIBE params "btcusdt@kline_<code>" and "btcusdt@miniTicker".
 //   Kraken REST   .../0/public/OHLC?pair=XBTUSD&interval=<m> (also with &since= for polls), Kraken WS v2
 //                 subscribe {"channel":"ohlc", ..., "interval": <m>}, where m is a Kraken interval (1, 5, 15, 30,
@@ -42,6 +48,7 @@
 
 using System.Text.Json;
 using BitcoinWallpaper.Chart.Core.Candles;
+using BitcoinWallpaper.Chart.Core.Layout;
 using BitcoinWallpaper.Market.Data.Tests.Fakes;
 
 namespace BitcoinWallpaper.Market.Data.Tests;
@@ -162,6 +169,36 @@ public class IntervalFeedTests
 
         Assert.Equal(MarketSource.Binance, sim.Client.Candles.Source);
         Assert.Equal(ExpectedBinance(interval, sim.Now, limit), sim.Client.Candles.Snapshot());
+    }
+
+    public static TheoryData<int, int, double> Screens => new()
+    {
+        { 5120, 1440, 1.75 }, // owner's desk: 4h, ~297 slots (D-29: ~48 days)
+        { 3840, 2160, 1.0 },  // owner's TV: 6h, ~141 slots
+        { 3840, 2160, 1.5 },
+        { 3440, 1440, 1.0 },
+        { 2560, 1440, 1.0 },
+        { 1920, 1080, 1.0 },
+        { 1080, 1920, 1.0 },
+        { 7680, 4320, 1.0 },
+    };
+
+    // D-29 (owner 2026-10-31): the chart fills all drawable slots, older history to the left of the 30 days.
+    [Theory]
+    [MemberData(nameof(Screens))]
+    public void Binance_history_is_long_enough_to_fill_the_drawable_slots_of_the_screen(int w, int h, double s)
+    {
+        var interval = IntervalPolicy.ForScreen(w, h, s, IntervalPolicy.DefaultPeriod);
+        var slots = LayoutEngine.Compute(w, h, s, 0).CandleSlots;
+        using var sim = new IntervalSim(interval);
+        sim.Run();
+        sim.Advance(TimeSpan.FromSeconds(1));
+
+        var history = sim.Transport.Rest(Exchange.Binance, "klines");
+        Assert.NotEmpty(history);
+        Assert.InRange(Limit(history[0]), slots, 1000);
+        Assert.True(sim.Client.Candles.Count >= slots,
+            $"{w}x{h}@{s}: {sim.Client.Candles.Count} candles of {interval} held, the screen has {slots} slots");
     }
 
     [Theory]
