@@ -25,8 +25,9 @@
 //   public sealed class CrosshairFrameGate
 //   {
 //       // true when what would be drawn differs from the last answered state: hidden <-> shown, a different candle
-//       // slot (CandleIndex), a different Y pixel (floor(Y)), or Price present vs null (volume pane). false otherwise (cursor still, or moved inside the
-//       // same slot and the same pixel row, or still hidden). The first call after construction compares with "hidden".
+//       // slot (CandleIndex), a different X pixel column (floor(X); the line follows the cursor, round 2), a different Y
+//       // pixel (floor(Y)), or Price present vs null (volume pane). false otherwise (cursor still, or moved inside the
+//       // same slot, pixel column and pixel row, or still hidden). The first call after construction compares with "hidden".
 //       public bool Update(CrosshairState? state);
 //   }
 
@@ -140,13 +141,16 @@ public class CrosshairVisibilityTests
     }
 
     [Fact]
-    public void Moving_inside_the_same_slot_and_the_same_pixel_row_asks_for_nothing()
+    public void Moving_inside_the_same_pixel_asks_for_nothing_and_a_new_pixel_column_asks_for_a_frame()
     {
         var gate = new CrosshairFrameGate();
         Assert.True(gate.Update(State(index: 5, y: 700.1)));
         Assert.False(gate.Update(State(index: 5, y: 700.9)));   // same row: floor(y) = 700
         Assert.False(gate.Update(State(index: 5, y: 700.1)));
         Assert.True(gate.Update(State(index: 5, y: 701.0)));    // next row
+        Assert.True(gate.Update(State(index: 5, y: 701.0, x: 300.2)));  // the line follows the cursor: new column, same slot
+        Assert.False(gate.Update(State(index: 5, y: 701.0, x: 300.9)));
+        Assert.True(gate.Update(State(index: 5, y: 701.0, x: 301.0)));
     }
 
     [Fact]
