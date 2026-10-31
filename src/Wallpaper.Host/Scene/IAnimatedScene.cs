@@ -21,4 +21,10 @@ internal interface IAnimatedScene : IWallpaperScene, IDisposable
 
     /// <summary>Windows reported the display on (dimmed counts as on) or off (D-15); off pauses like the pause monitor.</summary>
     void SetDisplayOn(bool displayOn);
+
+    /// <summary>Turned off from the tray (D-16): the scene's background work (the pause monitor) stops (#23).</summary>
+    void Suspend();
+
+    /// <summary>Turned on again after <see cref="Suspend"/>: the background work runs again.</summary>
+    void Resume();
 }
