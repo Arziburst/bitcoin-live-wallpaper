@@ -1,4 +1,5 @@
 using BitcoinWallpaper.Chart.Core.Candles;
+using BitcoinWallpaper.Chart.Core.Crosshair;
 using BitcoinWallpaper.Chart.Core.Indicators;
 using BitcoinWallpaper.Chart.Core.Layout;
 
@@ -56,6 +57,9 @@ public static class FrameView
 
     /// <summary>The 50-candle average drawn, one entry per frame candle.</summary>
     public static IReadOnlyList<decimal?> Ma50(ChartFrame frame) => new Scene(frame).Ma50;
+
+    /// <summary>The crosshair under the frame's cursor (D-35); null: hidden or no cursor.</summary>
+    public static CrosshairState? Crosshair(ChartFrame frame) => new Scene(frame).Crosshair;
 }
 
 /// <summary>What a frame derives to, computed from the frame alone.</summary>
@@ -103,7 +107,15 @@ internal sealed class Scene
         }
 
         Caption = frame.IsStale ? caption + "  ·  delayed" : caption;
+
+        // D-35: the crosshair against this frame's own scale; hidden (null) draws nothing.
+        Crosshair = frame.Cursor is { } cursor
+            ? CrosshairModel.Compute(cursor, Layout, Candles, Scale.Max, Scale.Min, paused: false)
+            : null;
     }
+
+    /// <summary>The crosshair under the frame's cursor (D-35), or null: nothing of it is drawn.</summary>
+    public CrosshairState? Crosshair { get; }
 
     /// <summary>The candle interval of the frame.</summary>
     public TimeSpan Interval { get; }

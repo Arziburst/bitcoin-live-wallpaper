@@ -18,7 +18,7 @@ namespace BitcoinWallpaper.Host.Scene;
 /// <see cref="ChartRenderer"/>. The pause monitor's events come from its timer thread and are posted to the host
 /// thread first. The data client keeps running while paused; the frames stop.
 /// </summary>
-internal sealed class LiveChartScene : IAnimatedScene
+internal sealed partial class LiveChartScene : IAnimatedScene
 {
     private readonly MarketDataClient _client;
     private readonly IPlaybackMonitor _monitor;
@@ -136,7 +136,7 @@ internal sealed class LiveChartScene : IAnimatedScene
         OnDisplay(placement);
         var frame = _live.TakeFrame();
         var kraken = _client.Candles.Source == MarketSource.Kraken;
-        _renderer.Draw(context, ChartFrame.Create(
+        _lastFrame = ChartFrame.Create(
             placement.Width,
             placement.Height,
             placement.Scale,
@@ -150,7 +150,8 @@ internal sealed class LiveChartScene : IAnimatedScene
             shiftPitches: frame.ShiftPitches,
             pulse: frame.Pulse,
             pulseUp: frame.PulseUp,
-            interval: _interval));
+            interval: _interval);
+        _renderer.Draw(context, _lastFrame with { Cursor = _cursor });
     }
 
     public void Dispose()
