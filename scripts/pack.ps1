@@ -1,10 +1,11 @@
-# Builds the per-user installer (Velopack): bin\pack\releases\BitcoinWallpaper-win-Setup.exe.
+# Builds the per-user installer (Velopack): bin\pack\releases\BLW_Installer.exe (D-33; vpk names it ...-Setup.exe,
+# this script renames it).
 #
 #   pwsh scripts/pack.ps1                  # version 0.1.0
 #   pwsh scripts/pack.ps1 -Version 0.1.7
 #
 # Steps: dotnet publish (self-contained win-x64, so the owner needs no .NET runtime), then vpk pack. vpk is fetched
-# into bin\pack\tools (git-ignored, nothing is installed system-wide). Setup.exe installs into
+# into bin\pack\tools (git-ignored, nothing is installed system-wide). The installer installs into
 # %LOCALAPPDATA%\BitcoinWallpaper without admin rights, creates the Desktop and Start Menu shortcuts
 # "Bitcoin Live Wallpaper" with the app icon and registers the app in Settings -> Apps under that name.
 param(
@@ -57,4 +58,8 @@ Invoke-Checked 'vpk pack' {
 
 $setup = Get-ChildItem $releases -Filter '*Setup.exe' | Select-Object -First 1
 if (-not $setup) { throw "no Setup.exe in $releases" }
-Write-Host "Setup: $($setup.FullName) ($([math]::Round($setup.Length / 1MB, 1)) MB)"
+# D-33: the owner's file name for the installer; the app's name, shortcuts and tray stay 'Bitcoin Live Wallpaper'.
+$installer = Join-Path $releases 'BLW_Installer.exe'
+Move-Item -Force $setup.FullName $installer
+$installer = Get-Item $installer
+Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"

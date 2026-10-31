@@ -54,7 +54,7 @@ jobs:
             tests/Chart.Render.Tests/bin/Release/net10.0-windows/golden-failures/
           if-no-files-found: ignore
 
-  # The per-user installer (Velopack, #9): the owner downloads Setup.exe from this artifact.
+  # The per-user installer (Velopack, #9): the owner downloads BLW_Installer.exe (D-33) from this artifact.
   package:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -68,13 +68,13 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
-      - name: Pack Setup.exe
+      - name: Pack BLW_Installer.exe
         shell: pwsh
         run: ./scripts/pack.ps1 -Version 0.1.${{ github.run_number }}
 
-      - name: Upload Setup.exe
+      - name: Upload BLW_Installer.exe
         uses: actions/upload-artifact@v4
         with:
-          name: BitcoinWallpaper-Setup
-          path: bin/pack/releases/*Setup.exe
+          name: BLW_Installer
+          path: bin/pack/releases/BLW_Installer.exe
           if-no-files-found: error

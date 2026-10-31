@@ -389,6 +389,38 @@ internal static unsafe partial class Native
     [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", StringMarshalling = StringMarshalling.Utf16)]
     public static partial nint GetModuleHandle(string? moduleName);
 
+    // ---- the screensaver (D-21) ----
+    public const uint WS_EX_TOPMOST = 0x0000_0008;
+    public const uint WM_SETCURSOR = 0x0020;
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_SYSKEYDOWN = 0x0104;
+    public const uint WM_MOUSEMOVE = 0x0200;
+    public const uint WM_LBUTTONDOWN = 0x0201;
+    public const uint WM_RBUTTONDOWN = 0x0204;
+    public const uint WM_MBUTTONDOWN = 0x0207;
+    public const uint WM_XBUTTONDOWN = 0x020B;
+    public const int BLACK_BRUSH = 4;
+    public const uint MB_OK = 0x0;
+    public const uint MB_ICONINFORMATION = 0x40;
+    public const uint SPI_SETSCREENSAVEACTIVE = 0x0011;
+    public const uint SPIF_SENDCHANGE = 0x2;
+
+    [LibraryImport("gdi32.dll")]
+    public static partial nint GetStockObject(int index);
+
+    [LibraryImport("user32.dll")]
+    public static partial nint SetCursor(nint cursor);
+
+    [LibraryImport("user32.dll")]
+    public static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
+
+    [LibraryImport("user32.dll", EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial int MessageBox(nint owner, string text, string caption, uint type);
+
+    [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SystemParametersInfo(uint action, uint uiParam, nint pvParam, uint winIni);
+
     public static string ClassNameOf(nint hwnd)
     {
         var buffer = stackalloc char[256];

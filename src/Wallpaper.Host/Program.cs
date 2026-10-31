@@ -4,6 +4,7 @@ using System.Reflection;
 using BitcoinWallpaper.Host.Install;
 using BitcoinWallpaper.Host.Playback;
 using BitcoinWallpaper.Host.Scene;
+using BitcoinWallpaper.Host.Screensaver;
 using BitcoinWallpaper.Host.Settings;
 using BitcoinWallpaper.Host.Supervisor;
 using BitcoinWallpaper.Market.Data;
@@ -28,8 +29,17 @@ internal static class Program
         // First, in both modes: Velopack's install/uninstall hooks run here and exit the process.
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ => InstallHooks.AfterInstall())
+            .OnAfterUpdateFastCallback(_ => InstallHooks.AfterUpdate())
             .OnBeforeUninstallFastCallback(_ => InstallHooks.BeforeUninstall())
             .Run();
+
+        // D-21: a screensaver start (/s, /p, /c, or the .scr with no arguments) never reaches the supervisor, the
+        // wallpaper child or the single-instance check.
+        var screensaver = ScreensaverArguments.Parse(args, Environment.ProcessPath);
+        if (screensaver != ScreensaverMode.None)
+        {
+            return ScreensaverApp.Run(screensaver);
+        }
 
         var kind = Launch.Parse(args);
         var crashTest = ProcessChildLauncher.IsCrashTest(args);
@@ -113,7 +123,8 @@ internal static class Program
             using var monitor = new PlaybackMonitor();
             using var scene = new LiveChartScene(client, monitor, TimeProvider.System);
             var menu = new TrayMenuModel(toggle, autostart, () => Native.PostQuitMessage(0),
-                openFolder: OpenFolder, logsDirectory: Log.Directory, version: AppVersion());
+                openFolder: OpenFolder, logsDirectory: Log.Directory, version: AppVersion(),
+                screensaver: InstallHooks.CurrentScreensaver());
             using (var host = new WallpaperHost(scene, menu, channel))
             {
                 control.Bind(host, feed);
