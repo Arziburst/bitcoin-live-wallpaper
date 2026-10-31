@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using BitcoinWallpaper.Chart.Core.Candles;
+using BitcoinWallpaper.Chart.Core.Layout;
 using BitcoinWallpaper.Market.Data.Binance;
 using BitcoinWallpaper.Market.Data.Kraken;
 
@@ -14,7 +15,10 @@ namespace BitcoinWallpaper.Market.Data;
 /// While on Kraken after a failover, Binance is tried every 30 min (+-10 %): a successful try switches back
 /// with a full history reload, a failed one leaves the Kraken feed alone and is not a Kraken failure.
 /// 3 cycles in a row whose REST answered but whose socket was refused start REST polling of the same
-/// source every 15 s (Mode RestPoll), with a socket retry every 2 min that ends it.</summary>
+/// source every 15 s (Mode RestPoll), with a socket retry every 2 min that ends it.
+/// The candles are of one interval (D-13): Binance serves every interval of the ladder; Kraken's nearest offered
+/// interval that divides it is aggregated (6h from 60 min). An interval change clears the series at once and
+/// reloads it; a candle of another interval never enters the buffer.</summary>
 /// <remarks>Every wait goes through the TimeProvider and every random draw through the jitter function;
 /// the client starts no threads of its own, so it runs deterministically on a single-threaded context.</remarks>
 public sealed class MarketDataClient
@@ -27,6 +31,9 @@ public sealed class MarketDataClient
 
     /// <summary>Polls in a row without an answer after which polling gives way to connect cycles again.</summary>
     private const int FailedPollsBeforeCycles = 3;
+
+    /// <summary>Kraken's fine candles kept for the aggregation (it serves at most 720 per request).</summary>
+    private const int MaxFineCandles = 2000;
 
     private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(30);
 
@@ -50,32 +57,14 @@ public sealed class MarketDataClient
     /// <summary>While on Kraken after a failover, Binance is tried this often (+-10 % jitter).</summary>
     private static readonly TimeSpan PrimaryTryEvery = TimeSpan.FromMinutes(30);
 
-    private const string BinanceKlines =
-        "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=5m";
-
-    private static readonly Uri BinanceKlinesUrl = new(BinanceKlines + "&limit=1000");
-
-    /// <summary>A poll needs only the newest candle and the one before it.</summary>
-    private static readonly Uri BinancePollUrl = new(BinanceKlines + "&limit=2");
-
     private static readonly Uri BinanceTickerUrl =
         new("https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT");
 
     private static readonly Uri BinanceStreamUrl = new("wss://data-stream.binance.vision/ws");
 
-    private const string BinanceSubscribe =
-        """{"method":"SUBSCRIBE","params":["btcusdt@kline_5m","btcusdt@miniTicker"],"id":1}""";
-
-    private const string KrakenOhlc = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=5";
-
-    private static readonly Uri KrakenOhlcUrl = new(KrakenOhlc);
-
     private static readonly Uri KrakenTickerUrl = new("https://api.kraken.com/0/public/Ticker?pair=XBTUSD");
 
     private static readonly Uri KrakenStreamUrl = new("wss://ws.kraken.com/v2");
-
-    private const string KrakenSubscribe =
-        """{"method":"subscribe","params":{"channel":"ohlc","symbol":["BTC/USD"],"interval":5}}""";
 
     private readonly IMarketTransport transport;
     private readonly TimeProvider time;
@@ -84,20 +73,41 @@ public sealed class MarketDataClient
     /// <summary>Earliest next REST request per source (Retry-After).</summary>
     private readonly Dictionary<MarketSource, DateTimeOffset> notBefore = [];
 
+    /// <summary>Guards plan, fineCandles, generation and every write to Candles, so an interval change on another
+    /// thread never lets a candle of the old interval in.</summary>
+    private readonly object gate = new();
+
+    private volatile Plan plan;
     private volatile MarketSource source = MarketSource.Binance;
     private volatile FeedMode mode = FeedMode.WebSocket;
     private volatile Ticker24h? ticker;
     private long lastDataTicks = long.MinValue;
 
+    /// <summary>Kraken's candles of the finer interval the series is aggregated from (empty unless it is).</summary>
+    private List<Candle> fineCandles = [];
+
+    /// <summary>Cancelled by an interval change: the running cycle, stream, poll or backoff ends and the series is
+    /// reloaded at once.</summary>
+    private CancellationTokenSource? generation;
+
     /// <summary>When Binance is tried next; set while on Kraken after a failover, null on Binance.</summary>
     private DateTimeOffset? primaryTryAt;
 
+    /// <summary>5-minute candles.</summary>
     /// <param name="jitter">Returns a uniform draw in [0, 1); the only source of randomness.</param>
     public MarketDataClient(IMarketTransport transport, TimeProvider time, Func<double> jitter)
+        : this(transport, time, jitter, CandleInterval.FiveMinutes)
+    {
+    }
+
+    /// <param name="jitter">Returns a uniform draw in [0, 1); the only source of randomness.</param>
+    /// <param name="interval">5 minutes or one of <see cref="IntervalPolicy.Ladder"/>.</param>
+    public MarketDataClient(IMarketTransport transport, TimeProvider time, Func<double> jitter, TimeSpan interval)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(time);
         ArgumentNullException.ThrowIfNull(jitter);
+        plan = Plan.For(interval);
         this.transport = transport;
         this.time = time;
         this.jitter = jitter;
@@ -109,6 +119,9 @@ public sealed class MarketDataClient
     /// <summary>How the data of Source arrives: over its WebSocket, or by REST polling while the socket
     /// is refused.</summary>
     public FeedMode Mode => mode;
+
+    /// <summary>The interval of the candles in <see cref="Candles"/>.</summary>
+    public TimeSpan Interval => plan.Interval;
 
     public FeedState State
     {
@@ -124,11 +137,52 @@ public sealed class MarketDataClient
         }
     }
 
-    /// <summary>Candles of Source only (capacity 1000).</summary>
+    /// <summary>Candles of Source only (capacity 1000), all of <see cref="Interval"/>.</summary>
     public CandleBuffer Candles { get; } = new();
 
     /// <summary>The latest 24 h ticker, or null before the first one.</summary>
     public Ticker24h? Ticker => ticker;
+
+    /// <summary>Another interval: before it returns, Interval is the new one and Candles holds no candle of the old
+    /// one; the series is then reloaded (REST history and a new socket, the old one closed) on the client's own
+    /// context. The same interval: nothing happens. Unsupported: ArgumentOutOfRangeException, nothing changes.</summary>
+    public void ChangeInterval(TimeSpan interval)
+    {
+        var next = Plan.For(interval);
+        CancellationTokenSource? reload;
+        lock (gate)
+        {
+            if (next.Interval == plan.Interval)
+            {
+                return;
+            }
+
+            plan = next;
+            fineCandles = [];
+            if (Candles.Source is { } held)
+            {
+                Candles.Reset(held, []);
+            }
+
+            reload = generation;
+        }
+
+        if (reload is null)
+        {
+            return;
+        }
+
+        // Cancelling runs the client's continuations inline unless they belong to a SynchronizationContext: on a
+        // caller without one (the host's window thread), that is done on the thread pool instead.
+        if (SynchronizationContext.Current is null)
+        {
+            ThreadPool.UnsafeQueueUserWorkItem(static r => CancelQuietly(r), reload, preferLocal: false);
+        }
+        else
+        {
+            CancelQuietly(reload);
+        }
+    }
 
     /// <summary>Runs until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -139,71 +193,101 @@ public sealed class MarketDataClient
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            History? history = null;
-            IMarketSocket? socket = null;
-            var blocked = false;
+            using var cycle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Plan cyclePlan;
+            lock (gate)
+            {
+                generation = cycle;
+                cyclePlan = plan;
+            }
+
+            var ct = cycle.Token;
             try
             {
-                (history, socket) = await ConnectCycleAsync(source, cancellationToken);
-            }
-            catch (SourceBlockedException)
-            {
-                blocked = true;
-            }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
-            {
-            }
+                History? history = null;
+                IMarketSocket? socket = null;
+                var blocked = false;
+                try
+                {
+                    (history, socket) = await ConnectCycleAsync(source, cyclePlan, ct);
+                }
+                catch (SourceBlockedException)
+                {
+                    blocked = true;
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                }
 
-            if (socket is not null)
-            {
-                Commit(source, history!);
-            }
-            else if (history is not null)
-            {
-                // REST answered, the socket was refused: no reason to leave the source.
-                failedCycles = 0;
-                refusedSockets++;
-                if (refusedSockets >= RefusedSocketsBeforePolling)
+                if (socket is not null)
+                {
+                    Commit(source, cyclePlan, history!);
+                }
+                else if (history is not null)
+                {
+                    // REST answered, the socket was refused: no reason to leave the source.
+                    failedCycles = 0;
+                    refusedSockets++;
+                    if (refusedSockets >= RefusedSocketsBeforePolling)
+                    {
+                        refusedSockets = 0;
+                        Commit(source, cyclePlan, history);
+                        socket = await PollAsync(cyclePlan, ct);
+                    }
+                }
+
+                if (socket is not null)
+                {
+                    attempt = 0;
+                    failedCycles = 0;
+                    refusedSockets = 0;
+                    try
+                    {
+                        await StreamAsync(socket, source, cyclePlan, ct);
+                    }
+                    catch (Exception) when (!ct.IsCancellationRequested)
+                    {
+                        // Connection lost: reconnect below.
+                    }
+                }
+                else if (history is null)
                 {
                     refusedSockets = 0;
-                    Commit(source, history);
-                    socket = await PollAsync(cancellationToken);
+                    failedCycles++;
+                    if (blocked || failedCycles >= FailedCyclesBeforeSwitch)
+                    {
+                        SwitchSource(source == MarketSource.Binance ? MarketSource.Kraken : MarketSource.Binance);
+                        failedCycles = 0;
+                    }
                 }
-            }
 
-            if (socket is not null)
+                ct.ThrowIfCancellationRequested();
+                attempt++;
+                var delay = ReconnectPolicy.BackoffDelay(attempt, jitter());
+                if (notBefore.TryGetValue(source, out var earliest) && earliest - time.GetUtcNow() > delay)
+                {
+                    delay = earliest - time.GetUtcNow();
+                }
+
+                await Task.Delay(delay, time, ct);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && cycle.IsCancellationRequested)
             {
+                // The interval changed: reload at once, on the same source.
                 attempt = 0;
                 failedCycles = 0;
                 refusedSockets = 0;
-                try
-                {
-                    await StreamAsync(socket, source, cancellationToken);
-                }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    // Connection lost: reconnect below.
-                }
             }
-            else if (history is null)
+            finally
             {
-                refusedSockets = 0;
-                failedCycles++;
-                if (blocked || failedCycles >= FailedCyclesBeforeSwitch)
+                lock (gate)
                 {
-                    SwitchSource(source == MarketSource.Binance ? MarketSource.Kraken : MarketSource.Binance);
-                    failedCycles = 0;
+                    if (generation == cycle)
+                    {
+                        generation = null;
+                    }
                 }
             }
-
-            attempt++;
-            var delay = ReconnectPolicy.BackoffDelay(attempt, jitter());
-            if (notBefore.TryGetValue(source, out var earliest) && earliest - time.GetUtcNow() > delay)
-            {
-                delay = earliest - time.GetUtcNow();
-            }
-
-            await Task.Delay(delay, time, cancellationToken);
         }
     }
 
@@ -224,7 +308,7 @@ public sealed class MarketDataClient
     /// <summary>History over REST, then the socket. Throws when REST fails; a refused socket comes back as
     /// a null socket with the fetched history. Nothing is committed here.</summary>
     private async Task<(History History, IMarketSocket? Socket)> ConnectCycleAsync(
-        MarketSource cycleSource, CancellationToken cancellationToken)
+        MarketSource cycleSource, Plan cyclePlan, CancellationToken cancellationToken)
     {
         using var timeout = new CancellationTokenSource(CycleTimeout, time);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
@@ -233,21 +317,26 @@ public sealed class MarketDataClient
         History history;
         if (cycleSource == MarketSource.Binance)
         {
-            var klines = await GetOkAsync(cycleSource, BinanceKlinesUrl, ct);
+            var klines = await GetOkAsync(cycleSource, cyclePlan.BinanceKlinesUrl, ct);
             var tickerJson = await GetOkAsync(cycleSource, BinanceTickerUrl, ct);
             history = new History(
                 BinanceParser.ParseKlines(klines, time.GetUtcNow()),
-                BinanceParser.ParseTicker24h(tickerJson));
+                BinanceParser.ParseTicker24h(tickerJson),
+                null);
         }
         else
         {
-            var ohlc = await GetOkAsync(cycleSource, KrakenOhlcUrl, ct);
-            history = new History(KrakenParser.ParseOhlc(ohlc, time.GetUtcNow()), null);
+            var ohlc = await GetOkAsync(cycleSource, cyclePlan.KrakenOhlcUrl, ct);
+            var now = time.GetUtcNow();
+            var rows = KrakenParser.ParseOhlc(ohlc, now, cyclePlan.KrakenInterval);
+            history = cyclePlan.Aggregates
+                ? new History(CandleAggregator.Aggregate(rows, cyclePlan.Interval, now), null, rows)
+                : new History(rows, null, null);
         }
 
         try
         {
-            return (history, await OpenSocketAsync(cycleSource, ct));
+            return (history, await OpenSocketAsync(cycleSource, cyclePlan, ct));
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -255,17 +344,104 @@ public sealed class MarketDataClient
         }
     }
 
-    /// <summary>Replaces the series with the history of <paramref name="historySource"/>.</summary>
-    private void Commit(MarketSource historySource, History history)
+    /// <summary>Replaces the series with the history of <paramref name="historySource"/>, unless the interval
+    /// changed since the history was asked for.</summary>
+    private void Commit(MarketSource historySource, Plan historyPlan, History history)
     {
-        Candles.Reset(historySource, history.Candles);
-        ticker = history.Ticker ?? DeriveTicker();
-        MarkData();
+        lock (gate)
+        {
+            if (historyPlan != plan)
+            {
+                return;
+            }
+
+            Candles.Reset(historySource, history.Candles);
+            fineCandles = history.Fine is { } fine ? [.. fine] : [];
+            ticker = history.Ticker ?? DeriveTicker();
+            MarkData();
+        }
+    }
+
+    /// <summary>Candles of the source and the plan's interval (Kraken's finer ones when the plan aggregates) into
+    /// the series. False, and nothing stored, when the interval or the series' source changed meanwhile.</summary>
+    private bool Store(MarketSource candleSource, Plan candlePlan, IReadOnlyList<Candle> candles)
+    {
+        lock (gate)
+        {
+            if (candlePlan != plan || Candles.Source != candleSource)
+            {
+                return false;
+            }
+
+            if (candleSource == MarketSource.Kraken && candlePlan.Aggregates)
+            {
+                StoreFine(candlePlan.Interval, candles);
+            }
+            else
+            {
+                foreach (var candle in candles)
+                {
+                    Candles.Upsert(candleSource, candle);
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>Merges fine candles and rebuilds the buckets they touch; a bucket older than the series' oldest
+    /// (the incomplete leading one) is left out.</summary>
+    private void StoreFine(TimeSpan interval, IReadOnlyList<Candle> candles)
+    {
+        var touched = new SortedSet<DateTimeOffset>();
+        foreach (var candle in candles)
+        {
+            var index = fineCandles.BinarySearch(candle, OpenTimeOrder.Instance);
+            if (index >= 0)
+            {
+                fineCandles[index] = candle;
+            }
+            else
+            {
+                fineCandles.Insert(~index, candle);
+            }
+
+            touched.Add(CandleAggregator.BucketStart(candle.OpenTime, interval));
+        }
+
+        if (fineCandles.Count > MaxFineCandles)
+        {
+            fineCandles.RemoveRange(0, fineCandles.Count - MaxFineCandles);
+        }
+
+        var held = Candles.Snapshot();
+        var now = time.GetUtcNow();
+        foreach (var start in touched)
+        {
+            if (held.Count > 0 && start < held[0].OpenTime)
+            {
+                continue;
+            }
+
+            var from = fineCandles.FindIndex(c => c.OpenTime >= start);
+            if (from < 0 || fineCandles[from].OpenTime >= start + interval)
+            {
+                continue;
+            }
+
+            var to = from;
+            while (to < fineCandles.Count && fineCandles[to].OpenTime < start + interval)
+            {
+                to++;
+            }
+
+            Candles.Upsert(MarketSource.Kraken, CandleAggregator.Bucket(fineCandles, from, to, start, interval, now));
+        }
     }
 
     /// <summary>One Binance connect cycle while on Kraken. Success: switches to Binance with its full
     /// history and returns its socket. Failure: null, with the Kraken series and failure counts untouched.</summary>
-    private async Task<IMarketSocket?> TryPrimaryAsync(CancellationToken ct)
+    private async Task<IMarketSocket?> TryPrimaryAsync(Plan cyclePlan, CancellationToken ct)
     {
         var now = time.GetUtcNow();
         if (notBefore.TryGetValue(MarketSource.Binance, out var earliest) && earliest > now)
@@ -277,14 +453,14 @@ public sealed class MarketDataClient
         primaryTryAt = now + PrimaryTryDelay();
         try
         {
-            var (history, socket) = await ConnectCycleAsync(MarketSource.Binance, ct);
+            var (history, socket) = await ConnectCycleAsync(MarketSource.Binance, cyclePlan, ct);
             if (socket is null)
             {
                 return null;
             }
 
             SwitchSource(MarketSource.Binance);
-            Commit(MarketSource.Binance, history);
+            Commit(MarketSource.Binance, cyclePlan, history);
             return socket;
         }
         catch (Exception) when (!ct.IsCancellationRequested)
@@ -296,7 +472,7 @@ public sealed class MarketDataClient
     /// <summary>Polls the REST of Source every 15 s while its socket is refused; a socket retry every 2 min
     /// ends it. Returns the socket to stream (Source's, or Binance's after a successful primary try), or
     /// null when the polls stopped answering.</summary>
-    private async Task<IMarketSocket?> PollAsync(CancellationToken ct)
+    private async Task<IMarketSocket?> PollAsync(Plan cyclePlan, CancellationToken ct)
     {
         mode = FeedMode.RestPoll;
         try
@@ -320,7 +496,7 @@ public sealed class MarketDataClient
 
                 if (source == MarketSource.Kraken && primaryTryAt <= time.GetUtcNow())
                 {
-                    var primary = await TryPrimaryAsync(ct);
+                    var primary = await TryPrimaryAsync(cyclePlan, ct);
                     if (primary is not null)
                     {
                         return primary;
@@ -334,7 +510,7 @@ public sealed class MarketDataClient
                     {
                         using var timeout = new CancellationTokenSource(CycleTimeout, time);
                         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
-                        return await OpenSocketAsync(source, linked.Token);
+                        return await OpenSocketAsync(source, cyclePlan, linked.Token);
                     }
                     catch (Exception) when (!ct.IsCancellationRequested)
                     {
@@ -350,7 +526,7 @@ public sealed class MarketDataClient
                 if (nextPoll <= time.GetUtcNow())
                 {
                     nextPoll += PollEvery;
-                    if (await PollOnceAsync(source, ct))
+                    if (await PollOnceAsync(source, cyclePlan, ct))
                     {
                         failedPolls = 0;
                     }
@@ -379,7 +555,7 @@ public sealed class MarketDataClient
     }
 
     /// <summary>One poll: the newest candles and the 24 h ticker into the series. False when it failed.</summary>
-    private async Task<bool> PollOnceAsync(MarketSource pollSource, CancellationToken cancellationToken)
+    private async Task<bool> PollOnceAsync(MarketSource pollSource, Plan pollPlan, CancellationToken cancellationToken)
     {
         using var timeout = new CancellationTokenSource(CycleTimeout, time);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
@@ -388,30 +564,26 @@ public sealed class MarketDataClient
         {
             if (pollSource == MarketSource.Binance)
             {
-                var klines = await GetOkAsync(pollSource, BinancePollUrl, ct);
+                var klines = await GetOkAsync(pollSource, pollPlan.BinancePollUrl, ct);
                 var tickerJson = await GetOkAsync(pollSource, BinanceTickerUrl, ct);
                 var candles = BinanceParser.ParseKlines(klines, time.GetUtcNow());
                 var restTicker = BinanceParser.ParseTicker24h(tickerJson);
-                foreach (var candle in candles)
+                if (Store(pollSource, pollPlan, candles))
                 {
-                    Candles.Upsert(pollSource, candle);
+                    ticker = restTicker;
                 }
-
-                ticker = restTicker;
             }
             else
             {
-                var ohlc = await GetOkAsync(pollSource, KrakenPollUrl(), ct);
+                var ohlc = await GetOkAsync(pollSource, KrakenPollUrl(pollPlan), ct);
                 var tickerJson = await GetOkAsync(pollSource, KrakenTickerUrl, ct);
-                var candles = KrakenParser.ParseOhlc(ohlc, time.GetUtcNow());
-                foreach (var candle in candles)
+                var candles = KrakenParser.ParseOhlc(ohlc, time.GetUtcNow(), pollPlan.KrakenInterval);
+                if (Store(pollSource, pollPlan, candles))
                 {
-                    Candles.Upsert(pollSource, candle);
+                    // Kraken's ticker "o" is today's open, not the open 24 h ago: that one comes from the candles.
+                    var derived = DeriveTicker();
+                    ticker = derived is null ? null : KrakenParser.ParseTicker24h(tickerJson, derived.Open);
                 }
-
-                // Kraken's ticker "o" is today's open, not the open 24 h ago: that one comes from the candles.
-                var derived = DeriveTicker();
-                ticker = derived is null ? null : KrakenParser.ParseTicker24h(tickerJson, derived.Open);
             }
 
             MarkData();
@@ -425,21 +597,26 @@ public sealed class MarketDataClient
 
     /// <summary>OHLC from the second newest held candle on (Kraken's "since"); the whole history when
     /// fewer are held.</summary>
-    private Uri KrakenPollUrl()
+    private Uri KrakenPollUrl(Plan pollPlan)
     {
-        var candles = Candles.Snapshot();
+        IReadOnlyList<Candle> candles;
+        lock (gate)
+        {
+            candles = pollPlan.Aggregates ? [.. fineCandles] : Candles.Snapshot();
+        }
+
         return candles.Count < 2
-            ? KrakenOhlcUrl
-            : new Uri(KrakenOhlc + "&since=" + candles[^2].OpenTime.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+            ? pollPlan.KrakenOhlcUrl
+            : new Uri(pollPlan.KrakenOhlc + "&since=" + candles[^2].OpenTime.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
     }
 
-    private async Task<IMarketSocket> OpenSocketAsync(MarketSource socketSource, CancellationToken ct)
+    private async Task<IMarketSocket> OpenSocketAsync(MarketSource socketSource, Plan socketPlan, CancellationToken ct)
     {
         var binance = socketSource == MarketSource.Binance;
         var socket = await transport.ConnectAsync(binance ? BinanceStreamUrl : KrakenStreamUrl, ct);
         try
         {
-            await socket.SendAsync(binance ? BinanceSubscribe : KrakenSubscribe, ct);
+            await socket.SendAsync(binance ? socketPlan.BinanceSubscribe : socketPlan.KrakenSubscribe, ct);
             return socket;
         }
         catch
@@ -474,7 +651,7 @@ public sealed class MarketDataClient
     /// limit, opening the new socket before closing the old one.</summary>
     /// <remarks>On Kraken after a failover it also runs the Binance tries; a successful one replaces the
     /// Kraken socket with the Binance one.</remarks>
-    private async Task StreamAsync(IMarketSocket socket, MarketSource streamSource, CancellationToken ct)
+    private async Task StreamAsync(IMarketSocket socket, MarketSource streamSource, Plan streamPlan, CancellationToken ct)
     {
         var renewAt = time.GetUtcNow() + SocketLifetime;
         var lastMessageAt = time.GetUtcNow();
@@ -503,8 +680,9 @@ public sealed class MarketDataClient
                             return;
                         }
 
+                        ct.ThrowIfCancellationRequested();
                         lastMessageAt = time.GetUtcNow();
-                        Apply(streamSource, message);
+                        Apply(streamSource, streamPlan, message);
                         receive = socket.ReceiveAsync(ct);
                         continue;
                     }
@@ -519,7 +697,7 @@ public sealed class MarketDataClient
 
                 if (streamSource == MarketSource.Kraken && primaryTryAt <= now)
                 {
-                    var primary = await TryPrimaryAsync(ct);
+                    var primary = await TryPrimaryAsync(streamPlan, ct);
                     if (primary is not null)
                     {
                         Observe(receive);
@@ -542,7 +720,7 @@ public sealed class MarketDataClient
                 IMarketSocket? replacement = null;
                 try
                 {
-                    replacement = await OpenSocketAsync(streamSource, ct);
+                    replacement = await OpenSocketAsync(streamSource, streamPlan, ct);
                 }
                 catch (Exception) when (!ct.IsCancellationRequested)
                 {
@@ -569,10 +747,10 @@ public sealed class MarketDataClient
         }
     }
 
-    private void Apply(MarketSource messageSource, string message)
+    private void Apply(MarketSource messageSource, Plan messagePlan, string message)
     {
         // A message of a socket that no longer belongs to the series is dropped.
-        if (messageSource != source || Candles.Source != messageSource)
+        if (messageSource != source || Candles.Source != messageSource || messagePlan != plan)
         {
             return;
         }
@@ -581,11 +759,14 @@ public sealed class MarketDataClient
         {
             if (messageSource == MarketSource.Binance)
             {
-                switch (BinanceParser.ParseStreamMessage(message))
+                switch (BinanceParser.ParseStreamMessage(message, messagePlan.Code))
                 {
                     case CandleUpdate update:
-                        Candles.Upsert(messageSource, update.Candle);
-                        MarkData();
+                        if (Store(messageSource, messagePlan, [update.Candle]))
+                        {
+                            MarkData();
+                        }
+
                         break;
                     case TickerUpdate update:
                         ticker = update.Ticker;
@@ -595,13 +776,8 @@ public sealed class MarketDataClient
             }
             else
             {
-                var candles = KrakenParser.ParseWsOhlc(message, time.GetUtcNow());
-                foreach (var candle in candles)
-                {
-                    Candles.Upsert(messageSource, candle);
-                }
-
-                if (candles.Count > 0)
+                var candles = KrakenParser.ParseWsOhlc(message, time.GetUtcNow(), messagePlan.KrakenMinutes);
+                if (candles.Count > 0 && Store(messageSource, messagePlan, candles))
                 {
                     ticker = DeriveTicker();
                     MarkData();
@@ -615,10 +791,16 @@ public sealed class MarketDataClient
         }
     }
 
-    /// <summary>Kraken has no rolling 24 h ticker over WS: it is derived from the last 24 h of candles.</summary>
+    /// <summary>Kraken has no rolling 24 h ticker over WS: it is derived from the last 24 h of candles (the finer
+    /// ones when the series is aggregated).</summary>
     private Ticker24h? DeriveTicker()
     {
-        var candles = Candles.Snapshot();
+        IReadOnlyList<Candle> candles;
+        lock (gate)
+        {
+            candles = fineCandles.Count > 0 ? [.. fineCandles] : Candles.Snapshot();
+        }
+
         if (candles.Count == 0)
         {
             return null;
@@ -635,6 +817,18 @@ public sealed class MarketDataClient
     }
 
     private void MarkData() => Interlocked.Exchange(ref lastDataTicks, time.GetUtcNow().UtcTicks);
+
+    private static void CancelQuietly(CancellationTokenSource cts)
+    {
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // That cycle already ended; the next one starts with the new interval.
+        }
+    }
 
     private static async Task DisposeQuietlyAsync(IMarketSocket socket)
     {
@@ -656,8 +850,62 @@ public sealed class MarketDataClient
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
-    /// <summary>A connect cycle's REST history; Ticker null when it is derived from the candles (Kraken).</summary>
-    private sealed record History(IReadOnlyList<Candle> Candles, Ticker24h? Ticker);
+    /// <summary>A connect cycle's REST history; Ticker null when it is derived from the candles (Kraken); Fine the
+    /// Kraken candles an aggregated series was made from.</summary>
+    private sealed record History(IReadOnlyList<Candle> Candles, Ticker24h? Ticker, IReadOnlyList<Candle>? Fine);
+
+    /// <summary>The requests of one candle interval.</summary>
+    private sealed record Plan(TimeSpan Interval, string Code, int KrakenMinutes)
+    {
+        /// <summary>The OHLC intervals Kraken offers, in minutes (REST and WS v2).</summary>
+        private static readonly int[] KrakenOffered = [1, 5, 15, 30, 60, 240, 1440, 10080, 21600];
+
+        public bool Aggregates => KrakenMinutes != (int)Interval.TotalMinutes;
+
+        public TimeSpan KrakenInterval => TimeSpan.FromMinutes(KrakenMinutes);
+
+        public string BinanceKlines => $"https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval={Code}";
+
+        /// <summary>The Binance maximum: 30 days of every interval, and the drawable slots of every screen (D-29).</summary>
+        public Uri BinanceKlinesUrl => new(BinanceKlines + "&limit=1000");
+
+        /// <summary>A poll needs only the newest candle and the one before it.</summary>
+        public Uri BinancePollUrl => new(BinanceKlines + "&limit=2");
+
+        public string BinanceSubscribe =>
+            $$"""{"method":"SUBSCRIBE","params":["btcusdt@kline_{{Code}}","btcusdt@miniTicker"],"id":1}""";
+
+        public string KrakenOhlc => string.Create(
+            CultureInfo.InvariantCulture, $"https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval={KrakenMinutes}");
+
+        public Uri KrakenOhlcUrl => new(KrakenOhlc);
+
+        public string KrakenSubscribe => string.Create(
+            CultureInfo.InvariantCulture,
+            $$$"""{"method":"subscribe","params":{"channel":"ohlc","symbol":["BTC/USD"],"interval":{{{KrakenMinutes}}}}}""");
+
+        /// <summary>5 minutes or a ladder interval; Kraken's interval is the same when offered, else the largest
+        /// offered one that divides it (6h: 60, 8h: 240).</summary>
+        public static Plan For(TimeSpan interval)
+        {
+            if (interval != CandleInterval.FiveMinutes && !IntervalPolicy.Ladder.Contains(interval))
+            {
+                throw new ArgumentOutOfRangeException(nameof(interval), interval, "Supported: 5 minutes and " +
+                    string.Join(", ", IntervalPolicy.Ladder.Select(CandleInterval.Code)) + ".");
+            }
+
+            var minutes = (int)interval.TotalMinutes;
+            var kraken = KrakenOffered.Contains(minutes) ? minutes : KrakenOffered.Where(m => m < minutes && minutes % m == 0).Max();
+            return new Plan(interval, CandleInterval.Code(interval), kraken);
+        }
+    }
+
+    private sealed class OpenTimeOrder : IComparer<Candle>
+    {
+        public static readonly OpenTimeOrder Instance = new();
+
+        public int Compare(Candle? x, Candle? y) => x!.OpenTime.CompareTo(y!.OpenTime);
+    }
 
     private sealed class SourceBlockedException(MarketSource blocked)
         : Exception($"{blocked} refused the request with HTTP 451 (unavailable for legal reasons)");

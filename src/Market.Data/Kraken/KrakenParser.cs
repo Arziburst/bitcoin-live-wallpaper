@@ -9,7 +9,11 @@ public static class KrakenParser
 
     /// <summary>REST /0/public/OHLC (row: time, open, high, low, close, vwap, volume, count).
     /// IsClosed = open time + 5 min is not after <paramref name="now"/>.</summary>
-    public static IReadOnlyList<Candle> ParseOhlc(string json, DateTimeOffset now)
+    public static IReadOnlyList<Candle> ParseOhlc(string json, DateTimeOffset now) => ParseOhlc(json, now, RestInterval);
+
+    /// <summary>REST /0/public/OHLC of the given interval: IsClosed = open time + interval is not after
+    /// <paramref name="now"/>.</summary>
+    public static IReadOnlyList<Candle> ParseOhlc(string json, DateTimeOffset now, TimeSpan interval)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -37,7 +41,7 @@ public static class KrakenParser
                     JsonValues.Decimal(row[3]),
                     JsonValues.Decimal(row[4]),
                     JsonValues.Decimal(row[6]),
-                    openTime + RestInterval <= now));
+                    openTime + interval <= now));
             }
         }
 
@@ -71,7 +75,11 @@ public static class KrakenParser
 
     /// <summary>WS v2 message. Channel ohlc (snapshot or update) -> its candles, OpenTime = interval_begin,
     /// IsClosed = interval_begin + interval is not after <paramref name="now"/>; any other message -> empty.</summary>
-    public static IReadOnlyList<Candle> ParseWsOhlc(string json, DateTimeOffset now)
+    public static IReadOnlyList<Candle> ParseWsOhlc(string json, DateTimeOffset now) => ParseWsOhlc(json, now, null);
+
+    /// <summary>As <see cref="ParseWsOhlc(string, DateTimeOffset)"/>, only the items whose interval is
+    /// <paramref name="intervalMinutes"/>; items of any other interval are left out.</summary>
+    public static IReadOnlyList<Candle> ParseWsOhlc(string json, DateTimeOffset now, int? intervalMinutes)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -87,8 +95,14 @@ public static class KrakenParser
         var candles = new List<Candle>(data.GetArrayLength());
         foreach (var item in data.EnumerateArray())
         {
+            var minutes = JsonValues.Int64(item.GetProperty("interval"));
+            if (intervalMinutes is { } only && minutes != only)
+            {
+                continue;
+            }
+
             var openTime = JsonValues.Rfc3339(item.GetProperty("interval_begin").GetString()!);
-            var interval = TimeSpan.FromMinutes(JsonValues.Int64(item.GetProperty("interval")));
+            var interval = TimeSpan.FromMinutes(minutes);
             candles.Add(new Candle(
                 openTime,
                 JsonValues.Decimal(item, "open"),
