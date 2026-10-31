@@ -28,7 +28,8 @@ string? last = null;
 monitor.Sampled += (_, sample) =>
 {
     var fg = sample.Snapshot.Foreground;
-    var key = $"{sample.State}|{sample.Verdict}|{fg?.ClassName}";
+    // An uncorroborated guard also prints its countdown every 15 s.
+    var key = $"{sample.State}|{sample.Verdict}|{fg?.ClassName}|{(int?)(sample.GuardTimeLeft?.TotalSeconds / 15)}";
     lock (gate)
     {
         if (key == last)
@@ -41,6 +42,18 @@ monitor.Sampled += (_, sample) =>
         var foreground = fg is null ? "(none)" : $"{fg.ClassName} {Format(fg.Rect)}{(fg.IsZoomed ? " zoomed" : "")}";
         Console.WriteLine($"{DateTime.Now:HH:mm:ss} | {sample.State,-7} | {verdict,-25} | {foreground} | " +
             $"{sample.Snapshot.Notification} | {sample.Snapshot.Session}");
+
+        // The stale-flag guard (NotificationGuard) when Busy / D3D is in play.
+        if (sample.Verdict.Reason == PauseReason.NotificationCorroborated)
+        {
+            Console.WriteLine($"         guard: corroborated (a window covers >= {NotificationGuard.EvidencePercent} % " +
+                "of the monitor), paused for as long as it lasts");
+        }
+        else if (sample.Verdict.Reason == PauseReason.NotificationUncorroborated && sample.GuardTimeLeft is { } left)
+        {
+            Console.WriteLine($"         guard: uncorroborated, {left.TotalSeconds:0} s left of " +
+                $"{NotificationGuard.UncorroboratedLimit.TotalSeconds:0} s");
+        }
     }
 };
 monitor.PausedChanged += (_, e) =>
