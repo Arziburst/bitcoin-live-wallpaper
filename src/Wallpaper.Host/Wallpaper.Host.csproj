@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>BitcoinWallpaper</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Chart.Core\Chart.Core.csproj" />
+    <ProjectReference Include="..\Market.Data\Market.Data.csproj" />
+    <ProjectReference Include="..\Chart.Render.D2D\Chart.Render.D2D.csproj" />
+  </ItemGroup>
+
+</Project>
