@@ -42,7 +42,7 @@ public sealed class LockScreenSetting(string filePath, Action<string> log, Actio
         }
         catch (Exception e)
         {
-            log($"lock screen: cannot save the setting to {filePath} (kept until exit): {e.Message}");
+            log($"lock screen: cannot save the setting to {filePath} (kept until exit): {LockScreenImages.Describe(e)}");
             _unsaved = on;
         }
 
@@ -73,7 +73,7 @@ public sealed class LockScreenSetting(string filePath, Action<string> log, Actio
         }
         catch (Exception e)
         {
-            log($"lock screen: cannot read the setting {filePath}, taken as on: {e.Message}");
+            log($"lock screen: cannot read the setting {filePath}, taken as on: {LockScreenImages.Describe(e)}");
             return true;
         }
     }

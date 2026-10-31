@@ -132,6 +132,7 @@ internal sealed class LockScreenUpdater(MarketDataClient client, LockScreenImage
         }
         catch (Exception e)
         {
+            Log.Warn($"lock screen: the snapshot failed: {LockScreenImages.Describe(e)}");
             result = new LockScreenResult(false, null, e.Message);
         }
 

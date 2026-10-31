@@ -44,7 +44,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         }
         catch (Exception e)
         {
-            return Fail($"preparing {folder} failed: {e.Message}");
+            return Fail($"preparing {folder} failed", e);
         }
 
         try
@@ -55,7 +55,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         catch (Exception e)
         {
             TryDelete(path);
-            return Fail($"setting the snapshot failed: {e.Message}");
+            return Fail("setting the snapshot failed", e);
         }
 
         foreach (var file in Ours())
@@ -104,7 +104,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         }
         catch (Exception e)
         {
-            return Fail($"preparing the restore failed: {e.Message}");
+            return Fail("preparing the restore failed", e);
         }
 
         try
@@ -118,7 +118,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
                 TryDelete(target);
             }
 
-            return Fail($"restoring {target} failed: {e.Message}");
+            return Fail($"restoring {target} failed", e);
         }
 
         foreach (var file in Ours())
@@ -157,7 +157,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         }
         catch (Exception e)
         {
-            log($"lock screen: cannot read the current picture, no backup taken: {e.Message}");
+            log($"lock screen: cannot read the current picture, no backup taken: {Describe(e)}");
             return;
         }
 
@@ -187,7 +187,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         }
         catch (Exception e)
         {
-            log($"lock screen: backing up {original} failed: {e.Message}");
+            log($"lock screen: backing up {original} failed: {Describe(e)}");
         }
     }
 
@@ -224,7 +224,7 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         }
         catch (Exception e)
         {
-            log($"lock screen: listing {folder} failed: {e.Message}");
+            log($"lock screen: listing {folder} failed: {Describe(e)}");
             return [];
         }
     }
@@ -237,15 +237,20 @@ public sealed class LockScreenImages(ILockScreenApi api, ILockScreenFiles files,
         }
         catch (Exception e)
         {
-            log($"lock screen: deleting {path} failed: {e.Message}");
+            log($"lock screen: deleting {path} failed: {Describe(e)}");
         }
     }
 
-    private LockScreenResult Fail(string message)
+    /// <summary>The log line carries the exception type and HRESULT; the result's Error (the tooltip) stays short.</summary>
+    private LockScreenResult Fail(string what, Exception? e = null)
     {
-        log("lock screen: " + message);
-        return new LockScreenResult(false, null, message);
+        log("lock screen: " + what + (e is null ? "" : ": " + Describe(e)));
+        return new LockScreenResult(false, null, e is null ? what : what + ": " + e.Message.Trim());
     }
+
+    /// <summary>For the log, as probe #39 printed it: "COMException HRESULT 0x80070005: Access is denied."</summary>
+    internal static string Describe(Exception e) =>
+        string.Create(CultureInfo.InvariantCulture, $"{e.GetType().Name} HRESULT 0x{e.HResult:X8}: {e.Message.Trim()}");
 
     private static bool SamePath(string a, string b) =>
         string.Equals(Path.TrimEndingDirectorySeparator(a), Path.TrimEndingDirectorySeparator(b), StringComparison.OrdinalIgnoreCase);

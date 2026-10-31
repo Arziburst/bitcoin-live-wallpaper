@@ -8,12 +8,14 @@ namespace BitcoinWallpaper.Host.Install;
 /// The Velopack fast callbacks (they run in a short-lived process of the installed exe, then Velopack exits it).
 /// After install: autostart on (the first run does the same; whichever comes first wins) and BitcoinWallpaper.scr is
 /// written next to the exe; after an update the .scr is written again (D-21). Before uninstall: the running instance
-/// exits (the normal wallpaper is back), the previous Windows screensaver is restored (D-21), the user's own lock screen picture is set back (D-34), the Run value, the
-/// settings, the first-run marker and the logs are removed; Velopack then deletes the program folder and the shortcuts.
+/// exits (the normal wallpaper is back), the previous Windows screensaver is restored (D-21), the Run value, the
+/// settings and the first-run marker are removed, the user's own lock screen picture is set back (D-34, a bounded
+/// wait) and the logs are removed; Velopack then deletes the program folder and the shortcuts.
 /// </summary>
 internal static class InstallHooks
 {
     private static readonly TimeSpan ExitWait = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan LockScreenRestoreWait = TimeSpan.FromSeconds(10);
 
     public static Autostart CurrentAutostart() =>
         new(new RegistryRunKey(), new FileFirstRunMarker(FileFirstRunMarker.DefaultPath), Environment.ProcessPath!);
@@ -43,11 +45,16 @@ internal static class InstallHooks
         Try(() => WindowInstanceChannel.RequestExit(ExitWait));
         Try(() => CurrentScreensaver().OnUninstall());
         Try(() => File.Delete(ScreensaverSetting.DefaultSavedFilePath));
-        Try(RestoreLockScreen);
-        Try(() => File.Delete(LockScreenSetting.DefaultFilePath));
+
+        // The lock screen item is read before its file goes; the restore itself runs after the quick steps, so a
+        // hanging Windows call cannot keep them from running (D-34).
+        var lockScreenOn = true;
+        Try(() => lockScreenOn = new LockScreenSetting(LockScreenSetting.DefaultFilePath, Log.Warn).IsOn);
         Try(() => CurrentAutostart().OnUninstall());
         Try(() => File.Delete(FileSettingsStore.DefaultPath));
         Try(() => File.Delete(FileSettingsStore.DefaultPath + ".tmp"));
+        Try(() => File.Delete(LockScreenSetting.DefaultFilePath));
+        Try(() => RestoreLockScreen(lockScreenOn));
         Try(() =>
         {
             if (Directory.Exists(Log.Directory))
@@ -59,18 +66,25 @@ internal static class InstallHooks
 
     /// <summary>
     /// D-34: with the item on, our snapshot is on the lock screen: the user's own picture is set back (with the item
-    /// off it was restored when it was turned off, and a picture chosen since then must stay). Then our files go,
-    /// except a restore_ copy that may be the picture Windows now shows.
+    /// off it was restored when it was turned off, and a picture chosen since then must stay). The wait is bounded by
+    /// <see cref="LockScreenRestoreWait"/>. Our files in lock\ are deleted here only to tidy up early: Velopack deletes
+    /// %LOCALAPPDATA%\BitcoinWallpaper with everything in it after this hook anyway.
     /// </summary>
-    private static void RestoreLockScreen()
+    private static void RestoreLockScreen(bool itemOn)
     {
-        if (new LockScreenSetting(LockScreenSetting.DefaultFilePath, Log.Warn).IsOn)
+        if (itemOn)
         {
             // On the pool (MTA), not this STA thread, as the wallpaper does it.
-            var result = Task.Run(() => CurrentLockScreenImages().RestoreAsync(DateTimeOffset.UtcNow)).GetAwaiter().GetResult();
-            if (!result.Ok)
+            var restore = Task.Run(() => CurrentLockScreenImages().RestoreAsync(DateTimeOffset.UtcNow));
+            if (!restore.Wait(LockScreenRestoreWait))
             {
-                return;   // keep everything: the backup is the user's only copy of the picture
+                Log.Warn($"lock screen: restoring the user's picture did not finish within {LockScreenRestoreWait.TotalSeconds:0} s; uninstall goes on");
+                return;
+            }
+
+            if (!restore.Result.Ok)
+            {
+                return;   // logged by LockScreenImages; nothing more to do here
             }
         }
 
@@ -80,6 +94,7 @@ internal static class InstallHooks
             return;
         }
 
+        // A restore_ copy is left for Velopack's cleanup with the rest of the folder.
         foreach (var file in Directory.GetFiles(folder))
         {
             if (!Path.GetFileName(file).StartsWith(LockScreenImages.RestorePrefix, StringComparison.OrdinalIgnoreCase))
