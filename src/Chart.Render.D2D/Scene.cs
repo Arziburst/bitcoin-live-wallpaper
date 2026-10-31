@@ -59,9 +59,6 @@ internal sealed class Scene
 
     public Candle? Last { get; }
 
-    /// <summary>The base asset of the pair ("BTC" of "BTC/USDT"): the watermark.</summary>
-    public string Base => Frame.Pair.Split('/')[0];
-
     public IReadOnlyList<decimal?> Ma20 { get; }
 
     public IReadOnlyList<decimal?> Ma50 { get; }

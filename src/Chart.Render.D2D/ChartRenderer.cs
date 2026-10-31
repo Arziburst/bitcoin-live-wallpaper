@@ -56,7 +56,6 @@ public sealed class ChartRenderer : IDisposable
 
         DrawBackground(target, frame.Layout);
         DrawGrid(target, paint, scene);
-        DrawWatermark(target, paint, scene);
         DrawVolume(target, paint, scene);
 
         target.PushAxisAlignedClip(ToRect(frame.Layout.Plot), AntialiasMode.Aliased);
@@ -131,16 +130,6 @@ public sealed class ChartRenderer : IDisposable
             var x = (float)Math.Floor(tick.X);
             target.FillRectangle(new Rect(x, top, 1, bottom - top), tick.IsDay ? paint.GridDay : paint.Grid);
         }
-    }
-
-    private void DrawWatermark(ID2D1RenderTarget target, Paint paint, Scene s)
-    {
-        var plot = s.Layout.Plot;
-        var size = plot.Height * 0.36;
-        using var text = TextLayout(s.Base, ChartFonts.Inter, FontWeight.Bold, size, plot.Width, TextAlignment.Center);
-        var height = text.Metrics.Height;
-        target.DrawTextLayout(
-            new Vector2((float)plot.X, (float)(plot.Y + ((plot.Height - height) / 2))), text, paint.Watermark);
     }
 
     private static void DrawVolume(ID2D1RenderTarget target, Paint paint, Scene s)
@@ -572,7 +561,6 @@ public sealed class ChartRenderer : IDisposable
             DayLine = Make(Palette.WithAlpha(Palette.AxisText, 0.55f));
             DayLabel = Make(Palette.WithAlpha(Palette.AxisText, 0.8f));
             DayTag = Make(Palette.WithAlpha(Palette.AxisText, 0.16f));
-            Watermark = Make(new Color4(1, 1, 1, 0.03f));
         }
 
         public ID2D1SolidColorBrush Up { get; }
@@ -610,8 +598,6 @@ public sealed class ChartRenderer : IDisposable
         public ID2D1SolidColorBrush DayLabel { get; }
 
         public ID2D1SolidColorBrush DayTag { get; }
-
-        public ID2D1SolidColorBrush Watermark { get; }
 
         public void Dispose()
         {
