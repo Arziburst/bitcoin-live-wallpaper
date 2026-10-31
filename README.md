@@ -47,10 +47,10 @@ pwsh scripts/pack.ps1                  # or: -Version 0.1.7
 ```
 
 publishes the host self-contained (win-x64) and runs `vpk pack` (vpk is fetched into the git-ignored
-`bin\pack\tools`, nothing is installed system-wide). The result is `bin\pack\releases\BitcoinWallpaper-win-Setup.exe`:
+`bin\pack\tools`, nothing is installed system-wide). The result is `bin\pack\releases\BLW_Installer.exe`:
 a per-user install (no admin) into `%LOCALAPPDATA%\BitcoinWallpaper`, listed in Settings → Apps as
 "Bitcoin Live Wallpaper", with Desktop and Start Menu shortcuts of that name and the app icon. CI builds the same
-Setup.exe on every pull request (artifact `BitcoinWallpaper-Setup`).
+Setup.exe on every pull request (artifact `BLW_Installer`).
 
 The app icon is `assets/icon/app.ico`, built from the owner's `assets/icon/app.png` by
 `pwsh assets/icon/build-ico.ps1` (ImageMagick 7).
@@ -72,5 +72,5 @@ and the logs.
 | `tests/Chart.Core.Tests` | `net10.0` | xUnit tests for Chart.Core. |
 | `tests/Market.Data.Tests` | `net10.0` | xUnit tests for Market.Data. |
 | `assets/icon` | | The owner's app icon: source PNG and the built ICO (D-14). |
-| `scripts/pack.ps1` | | Builds the Velopack Setup.exe. |
+| `scripts/pack.ps1` | | Builds the Velopack installer BLW_Installer.exe. |
 | `docs/decisions.md` | | Decision log (D-n entries). |
