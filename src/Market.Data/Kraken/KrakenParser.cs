@@ -44,6 +44,31 @@ public static class KrakenParser
         return candles;
     }
 
+    /// <summary>REST /0/public/Ticker: last trade (c), high, low and volume of the last 24 h (h, l, v at
+    /// index 1). Kraken's "o" is today's open, so the open 24 h ago is passed in.</summary>
+    public static Ticker24h ParseTicker24h(string json, decimal open24h)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("error", out var errors) && errors.GetArrayLength() > 0)
+        {
+            throw new FormatException("Kraken error: " + errors.GetRawText());
+        }
+
+        foreach (var pair in root.GetProperty("result").EnumerateObject())
+        {
+            var t = pair.Value;
+            return JsonValues.Ticker(
+                JsonValues.Decimal(t.GetProperty("c")[0]),
+                open24h,
+                JsonValues.Decimal(t.GetProperty("h")[1]),
+                JsonValues.Decimal(t.GetProperty("l")[1]),
+                JsonValues.Decimal(t.GetProperty("v")[1]));
+        }
+
+        throw new FormatException("Kraken ticker without a pair");
+    }
+
     /// <summary>WS v2 message. Channel ohlc (snapshot or update) -> its candles, OpenTime = interval_begin,
     /// IsClosed = interval_begin + interval is not after <paramref name="now"/>; any other message -> empty.</summary>
     public static IReadOnlyList<Candle> ParseWsOhlc(string json, DateTimeOffset now)

@@ -17,3 +17,11 @@ public enum FeedState
     Live,
     Stale,
 }
+
+/// <summary>WebSocket: the data comes over the source's socket. RestPoll: the socket is refused, the data
+/// comes from REST polls every 15 s.</summary>
+public enum FeedMode
+{
+    WebSocket,
+    RestPoll,
+}
