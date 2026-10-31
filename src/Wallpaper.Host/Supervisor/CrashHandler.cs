@@ -10,12 +10,34 @@ internal static partial class CrashHandler
 {
     public static readonly TimeSpan CrashTestDelay = TimeSpan.FromSeconds(8);
 
+    private static int _hostCode;
+    private static volatile bool _hostReturned;
+
     public static void Install() => AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         Die($"an unhandled exception on thread {Environment.CurrentManagedThreadId}", e.ExceptionObject);
 
-    /// <summary>An exception that escaped the wallpaper's main code: logged like an unhandled one.</summary>
+    /// <summary>
+    /// The host's run ended with <paramref name="code"/> (Exit, the end of the session, a startup error): an exception
+    /// in the cleanup after it is logged but keeps that code, so an Exit never turns into a restart.
+    /// </summary>
+    public static void HostReturned(int code)
+    {
+        _hostCode = code;
+        _hostReturned = true;
+    }
+
+    /// <summary>
+    /// An exception that escaped the wallpaper's main code: logged like an unhandled one; the crash code, or the
+    /// host's own code when it came from the cleanup after <see cref="HostReturned"/>.
+    /// </summary>
     public static int Escaped(Exception e)
     {
+        if (_hostReturned)
+        {
+            Log.Error($"the cleanup after the wallpaper ended (code {_hostCode}) failed, not a crash: {e}");
+            return _hostCode;
+        }
+
         Log.Error($"crash (an exception escaped Main): {e}");
         return RestartPolicy.CrashExitCode;
     }
@@ -38,11 +60,14 @@ internal static partial class CrashHandler
 
     private static void Die(string what, object error)
     {
-        Log.Error($"crash ({what}): {error}");
+        var returned = _hostReturned;
+        Log.Error(returned
+            ? $"{what} after the wallpaper ended (code {_hostCode}), not a crash: {error}"
+            : $"crash ({what}): {error}");
         Log.Close();
 
         // Ends now with our code; the CLR would end with 0xE0434352 after its own report.
-        TerminateProcess(GetCurrentProcess(), RestartPolicy.CrashExitCode);
+        TerminateProcess(GetCurrentProcess(), returned ? _hostCode : RestartPolicy.CrashExitCode);
     }
 
     [LibraryImport("kernel32.dll")]

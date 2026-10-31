@@ -115,6 +115,7 @@ internal static class Program
             {
                 control.Bind(host, feed);
                 code = host.Run();
+                CrashHandler.HostReturned(code);
             }
 
             monitor.Dispose();
@@ -125,7 +126,8 @@ internal static class Program
         catch (Exception e)
         {
             // A crash (D-24): logged with its stack, and the supervisor restarts the wallpaper. A window that cannot
-            // be created is no exception: host.Run returns 1 and nothing restarts.
+            // be created is no exception: host.Run returns 1 and nothing restarts. A failing cleanup after host.Run
+            // returned keeps its code (an Exit must never restart).
             code = CrashHandler.Escaped(e);
             feed?.Stop();
             return code;
