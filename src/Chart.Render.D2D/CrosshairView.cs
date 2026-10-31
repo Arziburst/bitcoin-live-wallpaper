@@ -84,7 +84,7 @@ internal sealed class CrosshairView
         return new CrosshairItem(CrosshairItemKind.PriceTag, text, new RectPx(centre - (width / 2), y - (height / 2), width, height));
     }
 
-    // On the time axis, centred on the line; kept on the screen at its edges.
+    // On the time axis, centred on the line; kept in the content (the screen without a work area, D-37) at its edges.
     private static CrosshairItem TimeTag(Scene s, double cursorX, Candle candle)
     {
         var l = s.Layout;
@@ -92,7 +92,7 @@ internal sealed class CrosshairView
         var text = Time(candle, s.Frame.TimeZone);
         var height = Scene.TagHeight * size;
         var width = Math.Ceiling((text.Length * Scene.MonoAdvance * size) + (2 * Scene.TagPadding * size));
-        var x = Math.Clamp(cursorX - (width / 2), 0, Math.Max(0, l.WidthPx - width));
+        var x = Math.Clamp(cursorX - (width / 2), l.Content.X, Math.Max(l.Content.X, l.Content.Right - width));
         var y = l.TimeAxis.Y + ((l.TimeAxis.Height - height) / 2);
         return new CrosshairItem(CrosshairItemKind.TimeTag, text, new RectPx(x, y, width, height));
     }

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using BitcoinWallpaper.Chart.Core.Candles;
 using BitcoinWallpaper.Chart.Core.Desktop;
+using BitcoinWallpaper.Chart.Core.Layout;
 using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Chart.Core.Pause;
 using BitcoinWallpaper.Host.LockScreenChart;
@@ -65,6 +66,9 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
     private DCompPresenter? _presenter;
     private TrayIcon? _tray;
     private SurfacePlacement? _placement;
+    private ScreenRect? _activeMonitor;
+    private WorkAreaRelayout? _workAreaRelayout;
+    private RectPx? _content;
     private bool _dirty;
     private bool _enabled;
     private bool _sceneStarted;
@@ -416,6 +420,7 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
         }
 
         _noMonitorLogged = false;
+        ApplyWorkArea(active.Bounds, trigger);
 
         if (_presenter is { DeviceLost: true })
         {
@@ -488,6 +493,38 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
         }
 
         UpdateCrosshair();
+    }
+
+    /// <summary>D-37: the chart lies in the active monitor's work area (rcWork, above the taskbar), the background fills
+    /// the whole monitor. Read on every check (one GetMonitorInfo), so a missed message is caught by the watchdog.</summary>
+    private void ApplyWorkArea(ScreenRect monitorBounds, string trigger)
+    {
+        _activeMonitor = monitorBounds;
+        var workArea = DesktopProbe.WorkArea(monitorBounds);
+        _workAreaRelayout ??= new WorkAreaRelayout(workArea);
+        var monitor = new PixelRect(monitorBounds.Left, monitorBounds.Top, monitorBounds.Right, monitorBounds.Bottom);
+        var content = SurfaceContent.For(SurfaceKind.DesktopWallpaper, monitor, workArea);
+        if (content == _content)
+        {
+            return;
+        }
+
+        Log.Info($"{trigger}: chart content {content.Width}x{content.Height} at ({content.X},{content.Y}) " +
+                 $"of the monitor {monitorBounds} (work area ({workArea.Left},{workArea.Top})-({workArea.Right},{workArea.Bottom}))");
+        _content = content;
+        _scene.SetContent(content);
+        _dirty = true;
+    }
+
+    /// <summary>WM_SETTINGCHANGE (SPI_SETWORKAREA) and WM_DISPLAYCHANGE: a changed work area of the active monitor
+    /// (the taskbar moved, resized, auto-hide toggled) lays the chart out again (D-37).</summary>
+    private void OnWorkAreaMessage(uint msg, nuint wParam)
+    {
+        if (_activeMonitor is { } bounds && _workAreaRelayout is { } relayout
+            && relayout.ShouldRelayout(msg, wParam, DesktopProbe.WorkArea(bounds)))
+        {
+            CheckSoon("work area change");
+        }
     }
 
     private void TryAttach(SurfacePlacement placement, ScreenRect monitorBounds, string trigger)
@@ -652,7 +689,11 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
         {
             case Native.WM_DISPLAYCHANGE:
                 Log.Info($"WM_DISPLAYCHANGE: {lParam & 0xFFFF}x{(lParam >> 16) & 0xFFFF}, {wParam} bpp");
+                OnWorkAreaMessage(msg, wParam);
                 CheckSoon("display change");
+                return 0;
+            case Native.WM_SETTINGCHANGE when wParam == WorkAreaRelayout.SPI_SETWORKAREA:
+                OnWorkAreaMessage(msg, wParam);
                 return 0;
             case Native.WM_DPICHANGED:
                 Log.Info($"WM_DPICHANGED: {wParam & 0xFFFF} dpi");
@@ -725,6 +766,7 @@ internal sealed unsafe partial class WallpaperHost : IDisposable, IFrameHost
         {
             case WatchdogTimer:
                 Check("watchdog");
+                CheckMouseHook();
                 break;
             case CheckSoonTimer:
                 Native.KillTimer(_window, CheckSoonTimer);

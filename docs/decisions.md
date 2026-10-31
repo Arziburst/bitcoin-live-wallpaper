@@ -27,3 +27,5 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-35** (2026-10-31) A crosshair follows the mouse over the bare desktop like TradingView: solid thin light grey-blue lines through the cursor, the price on the price axis, the candle's time on the time axis; the candles a line crosses are drawn slightly brighter, and on a candle its time, O/H/L/C and volume show in a small block next to the cursor (above it, below when there is no room).
 - **D-34** (2026-10-31) The lock screen shows a snapshot of the chart, refreshed every 30 minutes and at once on a new candle; a tray item turns it off and restores the user's own picture.
 - **D-36** (2026-10-31) A new installer updates the program when it is already installed; the user's settings are kept.
+- **D-37** (2026-10-31) On the desktop the chart fits the work area above the taskbar; the background fills the whole monitor; the lock screen picture and the screensaver use the whole monitor.
+- **D-38** (2026-10-31) The crosshair follows the mouse anywhere on the wallpaper's monitor, whatever is under the cursor; windows and icons cover its lines.

@@ -6,11 +6,13 @@ using BitcoinWallpaper.Host.Settings;
 namespace BitcoinWallpaper.Host;
 
 /// <summary>
-/// The crosshair (D-35) in the host: <see cref="MouseHook"/> posts <see cref="CursorMessage"/> when the mouse moves;
-/// the host reads what is under the cursor (<see cref="DesktopCursorProbe"/>), decides whether it shows
-/// (<see cref="CrosshairVisibility"/>), hands the cursor to the scene and presents a frame only when the picture changes
+/// The crosshair (D-35, D-38) in the host: <see cref="MouseHook"/> posts <see cref="CursorMessage"/> when the mouse
+/// moves; the host decides whether it shows (<see cref="CrosshairVisibility"/>: anywhere on our monitor, whatever is
+/// under the cursor), hands the cursor to the scene and presents a frame only when the picture changes
 /// (<see cref="CrosshairFrameGate"/>). No timer: while the mouse is still nothing runs. The hook runs only while the
-/// crosshair can show (on, attached, not paused); turning it off hides the crosshair with one frame.
+/// crosshair can show (on, attached, not paused); turning it off hides the crosshair with one frame. Windows may remove
+/// the hook silently (LowLevelHooksTimeout): the existing watchdog checks it with one GetCursorPos
+/// (<see cref="HookReinstallDecider"/>) and installs it again.
 /// </summary>
 internal sealed partial class WallpaperHost
 {
@@ -18,7 +20,7 @@ internal sealed partial class WallpaperHost
     private const uint CursorMessage = Native.WM_APP + 41;
 
     private readonly CrosshairFrameGate _crosshairGate = new();
-    private DesktopCursorProbe? _cursorProbe;
+    private readonly HookReinstallDecider _hookReinstall = new(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30));
     private MouseHook? _mouseHook;
     private bool _mouseHookFailed;
 
@@ -38,7 +40,7 @@ internal sealed partial class WallpaperHost
                 _mouseHookFailed = _mouseHook is null;
                 if (_mouseHook is not null)
                 {
-                    Log.Info("crosshair: following the mouse over the desktop");
+                    Log.Info("crosshair: following the mouse on the wallpaper's monitor");
                 }
             }
 
@@ -53,10 +55,32 @@ internal sealed partial class WallpaperHost
 
         _mouseHook.Dispose();
         _mouseHook = null;
-        _cursorProbe?.Dispose();
-        _cursorProbe = null;
         ShowCursorAt(null);
         Log.Info("crosshair: stopped following the mouse");
+    }
+
+    /// <summary>The watchdog (every 2 s, only while on): the hook is expected but has been silent while the cursor
+    /// moved, so Windows removed it; install it again. One GetCursorPos; nothing while the hook is not running.</summary>
+    private void CheckMouseHook()
+    {
+        if (_mouseHook is not { } hook || !CrosshairCanShow || !Native.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        var (x, y, at) = hook.LastReport();
+        var now = System.Diagnostics.Stopwatch.GetElapsedTime(0, System.Diagnostics.Stopwatch.GetTimestamp());
+        if (!_hookReinstall.ShouldReinstall(true, x, y, at, cursor.X, cursor.Y, now))
+        {
+            return;
+        }
+
+        Log.Warn($"crosshair: the mouse hook reported nothing for {(now - at).TotalSeconds:0.0} s while the cursor moved " +
+                 "(Windows removed it); installing it again");
+        hook.Dispose();
+        _mouseHook = null;
+        _mouseHookFailed = false;
+        UpdateCrosshair();
     }
 
     private void OnCursorMessage()
@@ -71,10 +95,7 @@ internal sealed partial class WallpaperHost
         {
             // Our layer covers the wallpaper's monitor; its rect is what is drawn (surface px = screen px - its origin).
             var monitor = new PixelRect(rect.Left, rect.Top, rect.Right, rect.Bottom);
-            var sample = CrosshairVisibility.Contains(monitor, x, y)
-                ? (_cursorProbe ??= new DesktopCursorProbe()).Sample(x, y)
-                : new CursorSample(x, y, null, false); // another monitor: no need to look under it
-            if (CrosshairVisibility.ShouldShow(sample, monitor, _paused, _enabled ? WallpaperState.On : WallpaperState.Off))
+            if (CrosshairVisibility.ShouldShow(new CursorSample(x, y), monitor, _paused, _enabled ? WallpaperState.On : WallpaperState.Off))
             {
                 cursor = new CursorPx(x - rect.Left, y - rect.Top);
             }
@@ -103,7 +124,5 @@ internal sealed partial class WallpaperHost
     {
         _mouseHook?.Dispose();
         _mouseHook = null;
-        _cursorProbe?.Dispose();
-        _cursorProbe = null;
     }
 }

@@ -24,7 +24,11 @@ public static class LayoutEngine
             : DisplayProfile.Desk;
     }
 
-    public static ChartLayout Compute(int widthPx, int heightPx, double dpiScale, int candleCount)
+    /// <param name="content">The rectangle (physical px, relative to the screen's top-left) the chart content lies in:
+    /// the work area above the taskbar on the desktop (D-37); null = the full screen. The sizes (text, candle pitch,
+    /// margins) still follow the screen, so the look does not change; only the extents follow the content. The
+    /// background stays full screen (<see cref="ChartLayout.WidthPx"/> / <see cref="ChartLayout.HeightPx"/>).</param>
+    public static ChartLayout Compute(int widthPx, int heightPx, double dpiScale, int candleCount, RectPx? content = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(widthPx);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(heightPx);
@@ -34,25 +38,31 @@ public static class LayoutEngine
         }
 
         ArgumentOutOfRangeException.ThrowIfNegative(candleCount);
+        var area = content ?? new RectPx(0, 0, widthPx, heightPx);
+        if (!(area.Width > 0) || !(area.Height > 0) || !(area.X >= 0) || !(area.Y >= 0) ||
+            area.Right > widthPx || area.Bottom > heightPx)
+        {
+            throw new ArgumentOutOfRangeException(nameof(content), area, "The content must have an area and lie inside the screen.");
+        }
 
         double w = widthPx, h = heightPx;
         var profile = ProfileFor(widthPx, heightPx, dpiScale);
         var tv = profile == DisplayProfile.Tv;
         var text = TextFor(h, tv);
 
-        // Horizontal: plot | price axis. The plot starts at the screen's left edge: nothing is reserved for desktop
+        // Horizontal: plot | price axis. The plot starts at the content's left edge: nothing is reserved for desktop
         // icons (D-20), and the oldest candle may be cut there (D-30).
-        const double plotX = 0;
+        var plotX = area.X;
         var labelWidth = Math.Ceiling(6.6 * text.AxisLabelPx); // "77,490.96" in mono plus padding
-        var plotWidth = Math.Round(AxisRightShare * w) - labelWidth - plotX;
-        var axisWidth = w - (plotX + plotWidth);
+        var plotWidth = Math.Round(AxisRightShare * area.Width) - labelWidth;
+        var axisWidth = area.Right - (plotX + plotWidth);
 
-        // Vertical: margin | plot | gap | volume | time axis | margin.
-        var top = Math.Round(0.03 * h);
+        // Vertical: margin | plot | gap | volume | time axis | margin, inside the content's rows.
+        var top = area.Y + Math.Round(0.03 * h);
         var bottom = Math.Round(0.015 * h);
         var timeAxisHeight = Math.Ceiling(2.0 * text.AxisLabelPx);
         var gap = Math.Round(0.006 * h);
-        var chartBottom = h - bottom - timeAxisHeight;
+        var chartBottom = area.Bottom - bottom - timeAxisHeight;
         var chartHeight = chartBottom - top - gap;
         var volumeHeight = Math.Round(chartHeight * VolumeShare(w / h));
         var plotHeight = chartHeight - volumeHeight;
@@ -80,7 +90,8 @@ public static class LayoutEngine
             BodyWidth(pitch, wick),
             wick,
             candleCount,
-            RightOffset);
+            RightOffset,
+            area);
     }
 
     private static TextSizes TextFor(double h, bool tv)

@@ -40,6 +40,7 @@ public sealed record ChartFrame(
     public CursorPx? Cursor { get; init; }
 
     /// <param name="interval">The candle interval; null: 5 minutes.</param>
+    /// <param name="content">The work area inside the screen the chart lies in (D-37); null: the full screen.</param>
     public static ChartFrame Create(
         int widthPx,
         int heightPx,
@@ -54,13 +55,14 @@ public sealed record ChartFrame(
         double shiftPitches = 0,
         double pulse = 0,
         bool pulseUp = false,
-        TimeSpan? interval = null)
+        TimeSpan? interval = null,
+        RectPx? content = null)
     {
         ArgumentNullException.ThrowIfNull(candles);
         var candleInterval = interval ?? CandleInterval.FiveMinutes;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(candleInterval, TimeSpan.Zero, nameof(interval));
         return new ChartFrame(
-            LayoutEngine.Compute(widthPx, heightPx, dpiScale, candles.Count),
+            LayoutEngine.Compute(widthPx, heightPx, dpiScale, candles.Count, content),
             candles,
             ticker,
             now,

@@ -82,7 +82,8 @@ internal sealed class ScreensaverScene : IWallpaperScene, IFrameHost, IDisposabl
             shiftPitches: frame.ShiftPitches,
             pulse: frame.Pulse,
             pulseUp: frame.PulseUp,
-            interval: _interval));
+            interval: _interval,
+            content: SurfaceContent.FullMonitor(placement.Width, placement.Height))); // D-37: the screensaver covers the taskbar
     }
 
     void IFrameHost.RequestFrame() => _requestFrame();

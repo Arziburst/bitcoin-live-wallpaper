@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using BitcoinWallpaper.Chart.Core.Desktop;
+using BitcoinWallpaper.Chart.Core.Pause;
 
 namespace BitcoinWallpaper.Host;
 
@@ -109,6 +110,23 @@ internal static unsafe class DesktopProbe
         }
 
         return list;
+    }
+
+    /// <summary>The work area (rcWork: the monitor without the taskbar and docked bars, D-37) of the monitor with these
+    /// bounds, virtual-screen physical px; the bounds themselves when the monitor cannot be read.</summary>
+    public static PixelRect WorkArea(ScreenRect monitorBounds)
+    {
+        var bounds = new PixelRect(monitorBounds.Left, monitorBounds.Top, monitorBounds.Right, monitorBounds.Bottom);
+        var rect = new Native.RECT { Left = bounds.Left, Top = bounds.Top, Right = bounds.Right, Bottom = bounds.Bottom };
+        var monitor = Native.MonitorFromRect(rect, Native.MONITOR_DEFAULTTONULL);
+        var info = new Native.MONITORINFOEXW { cbSize = (uint)sizeof(Native.MONITORINFOEXW) };
+        if (monitor == 0 || !Native.GetMonitorInfo(monitor, &info))
+        {
+            return bounds;
+        }
+
+        var w = info.rcWork;
+        return new PixelRect(w.Left, w.Top, w.Right, w.Bottom);
     }
 
     [UnmanagedCallersOnly]

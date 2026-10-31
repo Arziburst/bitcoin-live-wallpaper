@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace BitcoinWallpaper.Host.Crosshair;
@@ -29,6 +30,7 @@ internal sealed unsafe class MouseHook : IDisposable
     private nint _hook;
     private int _installError;
     private long _point;
+    private long _reportedAt;
     private int _pending;
 
     private MouseHook(nint target, uint message)
@@ -54,6 +56,14 @@ internal sealed unsafe class MouseHook : IDisposable
         }
 
         var hook = new MouseHook(target, message);
+
+        // Until the first move, the "last report" is the cursor at install time (HookReinstallDecider).
+        if (Native.GetCursorPos(out var cursor))
+        {
+            hook._point = Pack(cursor.X, cursor.Y);
+        }
+
+        hook._reportedAt = Stopwatch.GetTimestamp();
         _current = hook;
         hook._thread.Start();
         if (!hook._started.Wait(StartTimeoutMs) || hook._hook == 0)
@@ -71,11 +81,23 @@ internal sealed unsafe class MouseHook : IDisposable
     public bool TryTake(out int x, out int y)
     {
         var pending = Interlocked.Exchange(ref _pending, 0) != 0;
-        var point = Interlocked.Read(ref _point);
-        x = (int)(point >> 32);
-        y = (int)point;
+        (x, y) = Unpack(Interlocked.Read(ref _point));
         return pending;
     }
+
+    /// <summary>Any thread: the last point the hook reported (the cursor at install time before the first move) and
+    /// when, as Stopwatch time (<see cref="Stopwatch.GetElapsedTime(long, long)"/> from 0). For
+    /// <see cref="HookReinstallDecider"/>.</summary>
+    public (int X, int Y, TimeSpan At) LastReport()
+    {
+        var at = Stopwatch.GetElapsedTime(0, Interlocked.Read(ref _reportedAt));
+        var (x, y) = Unpack(Interlocked.Read(ref _point));
+        return (x, y, at);
+    }
+
+    private static long Pack(int x, int y) => ((long)x << 32) | (uint)y;
+
+    private static (int X, int Y) Unpack(long point) => ((int)(point >> 32), (int)point);
 
     /// <summary>Unhooks and ends the thread. Idempotent.</summary>
     public void Dispose()
@@ -134,7 +156,8 @@ internal sealed unsafe class MouseHook : IDisposable
             if (code == CrosshairNative.HC_ACTION && wParam == Native.WM_MOUSEMOVE && _current is { } hook && lParam != 0)
             {
                 var info = (CrosshairNative.MSLLHOOKSTRUCT*)lParam;
-                Interlocked.Exchange(ref hook._point, ((long)info->pt.X << 32) | (uint)info->pt.Y);
+                Interlocked.Exchange(ref hook._point, Pack(info->pt.X, info->pt.Y));
+                Interlocked.Exchange(ref hook._reportedAt, Stopwatch.GetTimestamp());
                 if (Interlocked.Exchange(ref hook._pending, 1) == 0)
                 {
                     Native.PostMessage(hook._target, hook._message, 0, 0);

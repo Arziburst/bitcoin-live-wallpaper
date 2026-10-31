@@ -40,7 +40,10 @@ internal sealed partial class LiveChartScene : IAnimatedScene
     /// null before the first frame.</summary>
     private TimeSpan? _interval;
 
-    private (int Width, int Height, double Scale)? _screen;
+    private (int Width, int Height, double Scale, RectPx? Content)? _screen;
+
+    /// <summary>D-37: the work area the chart lies in (set by the host); null until the host knows it.</summary>
+    private RectPx? _content;
 
     public LiveChartScene(MarketDataClient client, IPlaybackMonitor monitor, TimeProvider time)
     {
@@ -124,16 +127,27 @@ internal sealed partial class LiveChartScene : IAnimatedScene
         _client.Ticker?.Last,
         _lastLiveAt);
 
+    public void SetContent(RectPx content) => _content = content;
+
+    // The host's work area, when it fits this surface; else (a placement not caught up yet) the full surface.
+    private RectPx? ContentFor(SurfacePlacement placement) =>
+        _content is { } c && c.X >= 0 && c.Y >= 0 && c.Width > 0 && c.Height > 0
+        && c.Right <= placement.Width && c.Bottom <= placement.Height
+            ? c
+            : null;
+
     public void Draw(ID2D1DeviceContext context, SurfacePlacement placement)
     {
         var now = _time.GetUtcNow();
+        var content = ContentFor(placement);
         if (_live is null)
         {
-            _renderer.Draw(context, ChartFrame.Create(placement.Width, placement.Height, placement.Scale, [], null, now, TimeZoneInfo.Local));
+            _renderer.Draw(context, ChartFrame.Create(
+                placement.Width, placement.Height, placement.Scale, [], null, now, TimeZoneInfo.Local, content: content));
             return;
         }
 
-        OnDisplay(placement);
+        OnDisplay(placement, content);
         var frame = _live.TakeFrame();
         var kraken = _client.Candles.Source == MarketSource.Kraken;
         _lastFrame = ChartFrame.Create(
@@ -150,7 +164,8 @@ internal sealed partial class LiveChartScene : IAnimatedScene
             shiftPitches: frame.ShiftPitches,
             pulse: frame.Pulse,
             pulseUp: frame.PulseUp,
-            interval: _interval);
+            interval: _interval,
+            content: content);
         _renderer.Draw(context, _lastFrame with { Cursor = _cursor });
     }
 
@@ -162,19 +177,20 @@ internal sealed partial class LiveChartScene : IAnimatedScene
         _dwrite.Dispose();
     }
 
-    // The first frame and every display change: the screen's interval for 30 days (D-13). Another interval is a full
-    // reload: the client drops the old series at once and fetches the new one, the scene forgets what it showed, so
-    // intervals are never mixed - not in the buffer and not on screen.
-    private void OnDisplay(SurfacePlacement placement)
+    // The first frame and every display or work-area change: the interval for 30 days in the content (D-13, D-37).
+    // Another interval is a full reload: the client drops the old series at once and fetches the new one, the scene
+    // forgets what it showed, so intervals are never mixed - not in the buffer and not on screen.
+    private void OnDisplay(SurfacePlacement placement, RectPx? content)
     {
-        var screen = (placement.Width, placement.Height, placement.Scale);
+        var screen = (placement.Width, placement.Height, placement.Scale, content);
         if (screen == _screen)
         {
             return;
         }
 
         _screen = screen;
-        var decision = IntervalPolicy.OnDisplay(_interval, placement.Width, placement.Height, placement.Scale, IntervalPolicy.DefaultPeriod);
+        var decision = IntervalPolicy.OnDisplay(
+            _interval, placement.Width, placement.Height, placement.Scale, IntervalPolicy.DefaultPeriod, content);
         if (!decision.Reload)
         {
             return;

@@ -69,6 +69,15 @@ public sealed partial class ChartRenderer : IDisposable
         AgeLayouts();
 
         DrawBackground(target, frame.Layout);
+
+        // D-37: the background fills the screen, the chart only its content (the work area); the crosshair lines stay
+        // whole-monitor. With the content the full screen nothing is clipped (pixel-identical to before).
+        var clipContent = !frame.Layout.ContentIsFullScreen;
+        if (clipContent)
+        {
+            target.PushAxisAlignedClip(ToRect(frame.Layout.Content), AntialiasMode.Aliased);
+        }
+
         DrawGrid(target, paint, scene);
         DrawVolume(target, paint, scene);
 
@@ -84,6 +93,11 @@ public sealed partial class ChartRenderer : IDisposable
         DrawHeadline(target, paint, scene);
         DrawPriceAxis(target, paint, scene);
         DrawTimeAxis(target, paint, scene);
+        if (clipContent)
+        {
+            target.PopAxisAlignedClip();
+        }
+
         DrawCrosshair(target, scene);
     }
 
