@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using BitcoinWallpaper.Chart.Core.Desktop;
 using BitcoinWallpaper.Chart.Core.Motion;
 using BitcoinWallpaper.Host.Scene;
+using BitcoinWallpaper.Host.Settings;
 
 namespace BitcoinWallpaper.Host;
 
@@ -12,11 +13,13 @@ namespace BitcoinWallpaper.Host;
 /// notifications, the tray icon, timers), the desktop layer and the presenter. Everything runs on the thread
 /// that calls <see cref="Run"/>; the message loop blocks, so nothing runs while nothing happens. A frame is
 /// presented only when something changed (attach, placement, device loss, a redraw request) and, for an
-/// <see cref="IAnimatedScene"/>, once per display refresh while its tween runs (D-10).
+/// <see cref="IAnimatedScene"/>, once per display refresh while its tween runs (D-10). Turned off from the tray
+/// (D-16) only the window and the tray icon remain: see <see cref="DetachLayer"/>.
 /// </summary>
 internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
 {
-    private const string WindowClass = "BitcoinWallpaper.Host";
+    /// <summary>The hidden host window's class; a second start finds the running instance by it (D-17).</summary>
+    internal const string WindowClass = "BitcoinWallpaper.Host";
 
     private const uint TrayMessage = Native.WM_APP + 1;
     private const uint RedrawMessage = Native.WM_APP + 2;
@@ -47,6 +50,8 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
 
     private readonly IWallpaperScene _scene;
     private readonly IAnimatedScene? _animated;
+    private readonly TrayMenuModel _menu;
+    private readonly WindowInstanceChannel? _channel;
     private readonly ConcurrentQueue<Action> _posted = new();
     private readonly uint _taskbarCreatedMessage;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -56,6 +61,8 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private TrayIcon? _tray;
     private SurfacePlacement? _placement;
     private bool _dirty;
+    private bool _enabled;
+    private bool _sceneStarted;
     private bool _paused;
     private bool _sessionRegistered;
     private bool _shutDown;
@@ -74,10 +81,13 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     private TimeSpan _minuteLongestGap;
     private TimeSpan _lastPresentAt;
 
-    public WallpaperHost(IWallpaperScene scene)
+    /// <param name="channel">Its registered message (a second start's turn-on request) is handled on our thread.</param>
+    public WallpaperHost(IWallpaperScene scene, TrayMenuModel menu, WindowInstanceChannel? channel)
     {
         _scene = scene;
         _animated = scene as IAnimatedScene;
+        _menu = menu;
+        _channel = channel;
         _taskbarCreatedMessage = Native.RegisterWindowMessage("TaskbarCreated");
         _current = this;
     }
@@ -128,29 +138,100 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             Log.Warn("WTSRegisterSessionNotification failed; lock/unlock is covered by the watchdog only");
         }
 
-        _tray = new TrayIcon(_window, TrayMessage);
+        _tray = new TrayIcon(_window, TrayMessage, _menu);
         _tray.Add();
         _layer = new DesktopLayer(OnLayerLost);
 
-        Native.SetTimer(_window, WatchdogTimer, WatchdogMs, 0);
         Native.SetTimer(_window, MemoryTimer, FirstMemoryLogMs, 0);
-        Native.SetTimer(_window, FramesTimer, FramesLogMs, 0);
         if (!_posted.IsEmpty)
         {
             Native.PostMessage(_window, InvokeMessage, 0, 0);
         }
 
-        if (_animated is not null)
+        if (_enabled)
         {
-            // Requests made before the window existed are applied here (the scene kept them).
-            _animated.Start(this);
-            Native.SetTimer(_window, PollTimer, (uint)_animated.PollInterval.TotalMilliseconds, 0);
+            Enable("start");
+        }
+        else
+        {
+            Log.Info("the wallpaper is off: only the tray icon runs until it is turned on");
         }
 
-        Check("start");
         RunMessageLoop();
         Shutdown("exit requested");
         return 0;
+    }
+
+    /// <summary>
+    /// D-16 on: our layer goes behind the icons again (the watchdog keeps it there) and the scene runs. Before
+    /// <see cref="Run"/> it only marks the wish; Run applies it. Host thread only.
+    /// </summary>
+    public void AttachLayer()
+    {
+        if (_enabled)
+        {
+            return;
+        }
+
+        _enabled = true;
+        if (_window != 0 && !_shutDown)
+        {
+            Log.Info("turning the wallpaper on");
+            Enable("turned on");
+        }
+    }
+
+    /// <summary>
+    /// D-16 off: our window is destroyed (the shell repaints the normal wallpaper), the GPU device is released and
+    /// the watchdog, poll and frame timers stop; only the tray icon (and the 10-minute memory log) remain.
+    /// </summary>
+    public void DetachLayer()
+    {
+        if (!_enabled)
+        {
+            return;
+        }
+
+        _enabled = false;
+        if (_window == 0 || _shutDown)
+        {
+            return;
+        }
+
+        Log.Info("turning the wallpaper off");
+        Native.KillTimer(_window, WatchdogTimer);
+        Native.KillTimer(_window, CheckSoonTimer);
+        Native.KillTimer(_window, PollTimer);
+        Native.KillTimer(_window, FramesTimer);
+        _pendingTrigger = null;
+        _pendingSince = TimeSpan.Zero;
+        _attachFailures = 0;
+        _misplacedTries = 0;
+        Try(() => _presenter?.Unbind());
+        DropPresenter();
+        Try(() => _layer?.Detach("turned off"));
+        _placement = null;
+        _dirty = false;
+        LogMemory();
+    }
+
+    private void Enable(string trigger)
+    {
+        Native.SetTimer(_window, WatchdogTimer, WatchdogMs, 0);
+        Native.SetTimer(_window, FramesTimer, FramesLogMs, 0);
+        if (_animated is not null)
+        {
+            if (!_sceneStarted)
+            {
+                // Requests made before the window existed are applied here (the scene kept them).
+                _sceneStarted = true;
+                _animated.Start(this);
+            }
+
+            Native.SetTimer(_window, PollTimer, (uint)_animated.PollInterval.TotalMilliseconds, 0);
+        }
+
+        Check(trigger);
     }
 
     /// <summary>
@@ -252,7 +333,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
     /// </summary>
     private void Check(string trigger)
     {
-        if (_shutDown || _layer is null)
+        if (_shutDown || !_enabled || _layer is null)
         {
             return;
         }
@@ -394,7 +475,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
 
     private void RenderIfDirty()
     {
-        if (!_dirty || _paused || _placement is null || _presenter is not { IsBound: true } presenter)
+        if (!_dirty || _paused || !_enabled || _placement is null || _presenter is not { IsBound: true } presenter)
         {
             return;
         }
@@ -520,9 +601,7 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             case TrayMessage:
                 _tray?.OnCallback(lParam);
                 return 0;
-            case Native.WM_COMMAND when (wParam & 0xFFFF) == TrayIcon.ExitCommand:
-                Log.Info("Exit chosen in the tray menu");
-                Native.PostQuitMessage(0);
+            case Native.WM_COMMAND when _tray is not null && _tray.OnCommand(wParam):
                 return 0;
             case RedrawMessage:
                 _dirty = true;
@@ -556,6 +635,11 @@ internal sealed unsafe class WallpaperHost : IDisposable, IFrameHost
             Log.Info($"TaskbarCreated (explorer pid now {DesktopProbe.ExplorerPid()})");
             _tray?.Add();
             CheckSoon("TaskbarCreated");
+            return 0;
+        }
+
+        if (_channel is not null && _channel.OnMessage(msg))
+        {
             return 0;
         }
 
