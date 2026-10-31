@@ -2,25 +2,43 @@ using BitcoinWallpaper.Chart.Core.Pause;
 
 namespace BitcoinWallpaper.Host.Playback;
 
-/// <summary>Polls the window state every PollInterval, feeds PauseDecision and PauseDebouncer and raises
-/// PausedChanged. No notification exists for "a fullscreen app started", hence the poll.</summary>
+/// <summary>Polls the window state every PollInterval, feeds NotificationGuard (over PauseDecision) and
+/// PauseDebouncer and raises PausedChanged. No notification exists for "a fullscreen app started", hence the
+/// poll. Nothing a handler throws leaves the timer callback; Dispose waits for a running poll.</summary>
 public sealed class PlaybackMonitor : IPlaybackMonitor
 {
     public static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IPauseSnapshotSource source;
     private readonly TimeProvider time;
+    private readonly Action<string> log;
+    private readonly NotificationGuard guard;
     private readonly PauseDebouncer debouncer;
-    private readonly object gate = new();
-    private ITimer? timer;
-    private int polling;
-    private bool disposed;
+    private readonly Lock gate = new();
 
-    public PlaybackMonitor(IPauseSnapshotSource source, TimeProvider? time = null)
+    // Held for a whole poll, handlers included; Dispose takes it to wait for one. Reentrant, so Dispose from
+    // a handler on the polling thread does not deadlock.
+    private readonly object pollLock = new();
+    private ITimer? timer;
+    private volatile bool disposed;
+
+    // State and LastVerdict are published together as one immutable object: readers on other threads see
+    // the latest one and never a torn verdict.
+    private volatile Published published = new(PlaybackState.Running, PauseVerdict.Running);
+
+    public PlaybackMonitor(IPauseSnapshotSource source, TimeProvider? time)
+        : this(source, time, null)
+    {
+    }
+
+    /// <param name="log">Where a caught exception is reported, one call each; the host's log when null.</param>
+    public PlaybackMonitor(IPauseSnapshotSource source, TimeProvider? time = null, Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         this.source = source;
         this.time = time ?? TimeProvider.System;
+        this.log = log ?? Log.Warn;
+        guard = new NotificationGuard(this.time);
         debouncer = new PauseDebouncer(this.time);
     }
 
@@ -30,9 +48,9 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
     {
     }
 
-    public PlaybackState State { get; private set; } = PlaybackState.Running;
+    public PlaybackState State => published.State;
 
-    public PauseVerdict LastVerdict { get; private set; } = PauseVerdict.Running;
+    public PauseVerdict LastVerdict => published.Verdict;
 
     public event EventHandler<PausedChangedEventArgs>? PausedChanged;
 
@@ -47,45 +65,97 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
         }
     }
 
-    /// <summary>One poll; the timer calls it, and a tick that arrives while the previous one runs is skipped.</summary>
+    /// <summary>One poll; the timer calls it. A tick that arrives while the previous one runs is skipped, and
+    /// one that arrives after Dispose does nothing. Never throws.</summary>
     internal void Poll()
     {
-        if (Interlocked.Exchange(ref polling, 1) == 1)
+        if (disposed || !Monitor.TryEnter(pollLock))
         {
             return;
         }
 
         try
         {
-            PauseSnapshot snapshot;
-            try
+            if (!disposed)
             {
-                snapshot = source.Capture();
+                PollOnce();
             }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException
-                or DllNotFoundException or EntryPointNotFoundException)
-            {
-                return; // keep the last state; the next tick tries again
-            }
-
-            var verdict = PauseDecision.Evaluate(snapshot);
-            var previous = State;
-            var state = debouncer.Update(verdict.State);
-            LastVerdict = verdict;
-            State = state;
-
-            Sampled?.Invoke(this, new PlaybackSample(snapshot, verdict, state));
-            if (state != previous)
-            {
-                PausedChanged?.Invoke(this, new PausedChangedEventArgs(state, verdict));
-            }
+        }
+        catch (Exception ex)
+        {
+            Report("poll", ex);
         }
         finally
         {
-            Volatile.Write(ref polling, 0);
+            Monitor.Exit(pollLock);
         }
     }
 
+    private void PollOnce()
+    {
+        PauseSnapshot snapshot;
+        try
+        {
+            snapshot = source.Capture();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException
+            or DllNotFoundException or EntryPointNotFoundException)
+        {
+            return; // keep the last state; the next tick tries again
+        }
+
+        var verdict = guard.Evaluate(snapshot);
+        var previous = State;
+        var state = debouncer.Update(verdict.State);
+        published = new Published(state, verdict);
+
+        Raise(Sampled, new PlaybackSample(snapshot, verdict, state, guard.TimeLeft), nameof(Sampled));
+        if (state != previous && !disposed)
+        {
+            Raise(PausedChanged, new PausedChangedEventArgs(state, verdict), nameof(PausedChanged));
+        }
+    }
+
+    /// <summary>Calls each handler on its own, so one that throws neither stops the others nor the poll.</summary>
+    private void Raise<T>(EventHandler<T>? handlers, T args, string name)
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                ((EventHandler<T>)handler)(this, args);
+            }
+            catch (Exception ex)
+            {
+                Report(name + " handler", ex);
+            }
+        }
+    }
+
+    private void Report(string where, Exception ex)
+    {
+        try
+        {
+            log($"Playback monitor: {where} threw {ex.GetType().Name}: {ex.Message}");
+        }
+        catch
+        {
+            // A failing log must not take the timer thread down either.
+        }
+    }
+
+    /// <summary>Stops polling and returns once a poll running on another thread has finished; no event is
+    /// raised after it returns.</summary>
     public void Dispose()
     {
         lock (gate)
@@ -94,5 +164,11 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
             timer?.Dispose();
             timer = null;
         }
+
+        lock (pollLock)
+        {
+        }
     }
+
+    private sealed record Published(PlaybackState State, PauseVerdict Verdict);
 }

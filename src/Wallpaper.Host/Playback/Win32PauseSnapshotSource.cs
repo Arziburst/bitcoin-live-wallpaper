@@ -31,23 +31,30 @@ public sealed class Win32PauseSnapshotSource : IPauseSnapshotSource
     {
         var shell = GetShellWindow();
         var foregroundHandle = GetForegroundWindow();
-        var foreground = foregroundHandle == 0 ? null : Describe(foregroundHandle, shell);
+        var foreground = foregroundHandle == 0
+            ? null
+            : new CandidateWindow(Describe(foregroundHandle, shell), Flags(foregroundHandle));
 
-        var visible = new List<WindowInfo>();
+        // Windows that are not on screen are left out here already (describing every hidden window would only
+        // be dropped again); WindowFilter applies the same rule to them and to the foreground.
+        var windows = new List<CandidateWindow>();
         EnumWindows((hwnd, _) =>
         {
-            // Only what is really on screen: hidden, minimised and cloaked windows (other virtual desktops,
-            // suspended UWP apps, the closed Start menu) and click-through overlays never hide the wallpaper.
-            if (IsWindowVisible(hwnd) && !IsIconic(hwnd) && !IsCloaked(hwnd) && !IsClickThrough(hwnd))
+            var flags = Flags(hwnd);
+            if (WindowFilter.IsOnScreen(flags))
             {
-                visible.Add(Describe(hwnd, shell));
+                windows.Add(new CandidateWindow(Describe(hwnd, shell), flags));
             }
 
             return true;
         }, 0);
 
-        return new PauseSnapshot(activeMonitor(), foreground, visible, QueryNotificationState(), QuerySessionState());
+        return WindowFilter.BuildSnapshot(activeMonitor(), foreground, windows, QueryNotificationState(),
+            QuerySessionState());
     }
+
+    private static WindowFlags Flags(nint hwnd) =>
+        new(IsWindowVisible(hwnd), IsIconic(hwnd), IsCloaked(hwnd), IsClickThrough(hwnd));
 
     /// <summary>The primary monitor's full rect.</summary>
     public static PixelRect PrimaryMonitor()
@@ -68,7 +75,8 @@ public sealed class Win32PauseSnapshotSource : IPauseSnapshotSource
             IsZoomed: IsZoomed(hwnd),
             IsMinimized: IsIconic(hwnd),
             IsOurs: processId == ownProcessId,
-            IsShell: hwnd == shell);
+            IsShell: hwnd == shell,
+            Handle: hwnd);
     }
 
     /// <summary>The visible frame without the invisible resize borders; GetWindowRect when DWM cannot say.</summary>
