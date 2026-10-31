@@ -60,6 +60,7 @@ public static class LayoutEngine
         var headline = HeadlineRect(w, h, text, plot);
 
         var pitch = Math.Max(tv ? 24 : 15, Math.Round(0.011 * h));
+        var wick = tv ? 2 : 1;
         return new ChartLayout(
             widthPx,
             heightPx,
@@ -73,8 +74,8 @@ public static class LayoutEngine
             new RectPx(0, 0, IconSafeShare * w, h),
             text,
             pitch,
-            Math.Round(BodyShare * pitch),
-            tv ? 2 : 1,
+            BodyWidth(pitch, wick),
+            wick,
             candleCount,
             RightOffset);
     }
@@ -101,6 +102,11 @@ public static class LayoutEngine
             Math.Max(0.015 * h, 22),
             Math.Clamp(0.017 * h, 22, 44));
     }
+
+    // The whole number of px nearest to 62 % of the pitch with the wick's parity, so the wick sits exactly in the
+    // middle of the body on the pixel grid.
+    private static double BodyWidth(double pitch, int wick) =>
+        (2 * Math.Round(((BodyShare * pitch) - wick) / 2)) + wick;
 
     // 16 % of the chart height at 16:9 (and narrower), 14 % at 32:9, linear in between.
     private static double VolumeShare(double aspect)
