@@ -22,6 +22,10 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
     private ITimer? timer;
     private volatile bool disposed;
 
+    // Bumped by every Start and Stop; a timer callback polls only while its own Start is the current one, so a
+    // tick a stopped timer still delivers does nothing.
+    private volatile int generation;
+
     // State and LastVerdict are published together as one immutable object: readers on other threads see
     // the latest one and never a torn verdict.
     private volatile Published published = new(PlaybackState.Running, PauseVerdict.Running);
@@ -61,24 +65,50 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            timer ??= time.CreateTimer(_ => Poll(), null, TimeSpan.Zero, PollInterval);
+            if (timer is null)
+            {
+                var current = ++generation;
+                timer = time.CreateTimer(_ => Poll(current), null, TimeSpan.Zero, PollInterval);
+            }
         }
     }
 
-    /// <summary>One poll; the timer calls it. A tick that arrives while the previous one runs is skipped, and
-    /// one that arrives after Dispose does nothing. Never throws.</summary>
-    internal void Poll()
+    /// <summary>Stops polling (Off from the tray, #23) and returns once a poll running on another thread has
+    /// finished; no event is raised after it returns. Start polls again; Stop when not polling does nothing.</summary>
+    public void Stop()
     {
-        if (disposed || !Monitor.TryEnter(pollLock))
+        lock (gate)
+        {
+            if (timer is null)
+            {
+                return;
+            }
+
+            generation++;
+            timer.Dispose();
+            timer = null;
+        }
+
+        lock (pollLock)
+        {
+        }
+    }
+
+    /// <summary>One poll; the timer of the Start numbered <paramref name="current"/> calls it. A tick that
+    /// arrives while the previous one runs is skipped, and one that arrives after Stop or Dispose does nothing.
+    /// Never throws.</summary>
+    internal void Poll(int current)
+    {
+        if (!IsCurrent(current) || !Monitor.TryEnter(pollLock))
         {
             return;
         }
 
         try
         {
-            if (!disposed)
+            if (IsCurrent(current))
             {
-                PollOnce();
+                PollOnce(current);
             }
         }
         catch (Exception ex)
@@ -91,7 +121,9 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
         }
     }
 
-    private void PollOnce()
+    private bool IsCurrent(int current) => !disposed && generation == current;
+
+    private void PollOnce(int current)
     {
         PauseSnapshot snapshot;
         try
@@ -109,15 +141,15 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
         var state = debouncer.Update(verdict.State);
         published = new Published(state, verdict);
 
-        Raise(Sampled, new PlaybackSample(snapshot, verdict, state, guard.TimeLeft), nameof(Sampled));
-        if (state != previous && !disposed)
+        Raise(Sampled, new PlaybackSample(snapshot, verdict, state, guard.TimeLeft), nameof(Sampled), current);
+        if (state != previous && IsCurrent(current))
         {
-            Raise(PausedChanged, new PausedChangedEventArgs(state, verdict), nameof(PausedChanged));
+            Raise(PausedChanged, new PausedChangedEventArgs(state, verdict), nameof(PausedChanged), current);
         }
     }
 
     /// <summary>Calls each handler on its own, so one that throws neither stops the others nor the poll.</summary>
-    private void Raise<T>(EventHandler<T>? handlers, T args, string name)
+    private void Raise<T>(EventHandler<T>? handlers, T args, string name, int current)
     {
         if (handlers is null)
         {
@@ -126,7 +158,7 @@ public sealed class PlaybackMonitor : IPlaybackMonitor
 
         foreach (var handler in handlers.GetInvocationList())
         {
-            if (disposed)
+            if (!IsCurrent(current))
             {
                 return;
             }
