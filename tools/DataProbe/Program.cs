@@ -27,7 +27,7 @@ while (printed < Lines && TimeProvider.System.GetElapsedTime(started) < limit &&
     var last = candles[^1];
     var line = string.Create(
         CultureInfo.InvariantCulture,
-        $"{client.Source} BTC {ticker.Last:0.00} 24h {ticker.ChangeAbs:+0.00;-0.00} ({ticker.ChangePercent:+0.00;-0.00}%) " +
+        $"{client.Source} {(client.Mode == FeedMode.RestPoll ? "REST poll" : "WS")} BTC {ticker.Last:0.00} 24h {ticker.ChangeAbs:+0.00;-0.00} ({ticker.ChangePercent:+0.00;-0.00}%) " +
         $"H {ticker.High:0.00} L {ticker.Low:0.00} V {ticker.Volume:0.###} | 5m {last.OpenTime:HH:mm}Z " +
         $"O {last.Open:0.00} H {last.High:0.00} L {last.Low:0.00} C {last.Close:0.00} V {last.Volume:0.#####} " +
         $"{(last.IsClosed ? "closed" : "forming")} | {candles.Count} candles, {client.State}");
