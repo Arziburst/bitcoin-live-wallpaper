@@ -81,7 +81,8 @@ public sealed partial class ChartRenderer
     }
 
     // Solid thin lines on the pixel grid: the vertical one from the plot's top to the volume pane's bottom, the
-    // horizontal one across the plot only (none over the volume pane).
+    // horizontal one edge to edge of the screen, through the price-axis column under the price tag (none over the
+    // volume pane).
     private static void DrawCrosshairLines(ID2D1RenderTarget target, Scene s, double x, double y, bool horizontal, ID2D1Brush brush)
     {
         var l = s.Layout;
@@ -91,7 +92,7 @@ public sealed partial class ChartRenderer
         target.FillRectangle(new Rect((float)Math.Floor(x), top, width, (float)l.VolumePane.Bottom - top), brush);
         if (horizontal)
         {
-            target.FillRectangle(new Rect((float)l.Plot.X, (float)Math.Floor(y), (float)l.Plot.Width, width), brush);
+            target.FillRectangle(new Rect(0, (float)Math.Floor(y), l.WidthPx, width), brush);
         }
     }
 
