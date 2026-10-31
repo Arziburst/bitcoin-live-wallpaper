@@ -39,3 +39,17 @@ jobs:
 
       - name: Test
         run: dotnet test BitcoinWallpaper.sln -c Release --no-build --logger "console;verbosity=normal"
+
+      # Headless (WIC, software Direct2D) PNGs of the recorded snapshot; the golden-image test compares the same.
+      - name: Render fixture mockups
+        run: dotnet run --project tools/RenderMockup -c Release --no-build -- --offline --out mockups
+
+      - name: Upload mockups and golden-image failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mockups
+          path: |
+            mockups/
+            tests/Chart.Render.Tests/bin/Release/net10.0-windows/golden-failures/
+          if-no-files-found: ignore
