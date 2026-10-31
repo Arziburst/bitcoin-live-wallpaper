@@ -228,9 +228,9 @@ internal sealed unsafe class WallpaperHost : IDisposable
 
         EnsurePresenter();
         RenderIfDirty();
-        if (!_dirty)
+        if (!_dirty && _layer.State is not null)
         {
-            _pendingSince = TimeSpan.Zero;
+            _pendingSince = TimeSpan.Zero; // settled; keep the event time while still waiting for the shell
         }
     }
 
