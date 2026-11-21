@@ -211,6 +211,23 @@ public class ExchangeTimeClientTests
     public void The_history_parsers_take_the_exchange_time_for_IsClosed(string exchange, string localStart, int skewSeconds, bool closed) =>
         AssertIsClosedFollowsTheExchange(Enum.Parse<Exchange>(exchange), null, localStart, skewSeconds, closed);
 
+    // Kraken's WS candle: IsClosed = interval_begin + 5 min <= the exchange's now (the update's forming candle is the
+    // 02:05 one; it closes at 02:10:00 exchange time).
+    [Theory]
+    [InlineData("2026-10-31T02:08:30Z", 90, true)]
+    [InlineData("2026-10-31T02:10:30Z", -90, false)]
+    public void The_Kraken_stream_parser_takes_the_exchange_time_for_IsClosed(string localStart, int skewSeconds, bool closed)
+    {
+        using var sim = new Sim(Fixtures.Utc(localStart));
+        sim.Transport.Kraken.TimeSkew = TimeSpan.FromSeconds(skewSeconds);
+        GoToKraken(sim, snapshot: false);
+        Assert.True(sim.Client.Clock.HasOffset);
+
+        sim.Push(Exchange.Kraken, Fixtures.KrakenWsUpdate);
+
+        Assert.Equal(closed, sim.Client.Candles.Snapshot()[^1].IsClosed);
+    }
+
     // The 6 h candles of Kraken are aggregated from 60 min ones: the bucket 00:00-06:00 closes at 06:00 exchange time.
     [Theory]
     [InlineData("2026-10-31T05:58:30Z", 90, true)]
@@ -291,7 +308,7 @@ public class ExchangeTimeClientTests
         Assert.Equal(MarketSource.Binance, rig.Client.Source);
         Assert.Equal(FeedMode.WebSocket, rig.Client.Mode);
         Assert.Single(rig.Inner.Sockets);                         // the feed came up and stayed up
-        Assert.Single(rig.Inner.CallsTo(Exchange.Binance).Where(c => !c.IsSocket && PathHas(c, "klines"))); // no reload
+        Assert.Single(rig.Inner.CallsTo(Exchange.Binance), c => !c.IsSocket && PathHas(c, "klines")); // no reload
         Assert.Empty(rig.Inner.CallsTo(Exchange.Kraken));         // no 451 switch
         Assert.False(rig.Client.Clock.HasOffset);
         Assert.Equal(rig.Now, rig.Client.ExchangeNow);
