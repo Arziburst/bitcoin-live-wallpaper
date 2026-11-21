@@ -39,6 +39,7 @@ internal static class ScreensaverApp
             using var transport = new HttpMarketTransport();
             var client = new MarketDataClient(transport, TimeProvider.System, Random.Shared.NextDouble);
             client.Clock.Warning += offset => ScreensaverLog.Warn(Program.ClockWarning(offset));
+            client.TickDropped += reason => ScreensaverLog.Warn(Program.TickDroppedWarning(reason));
             using var stop = new CancellationTokenSource();
             var feed = Task.Run(() => client.RunAsync(stop.Token));
             try

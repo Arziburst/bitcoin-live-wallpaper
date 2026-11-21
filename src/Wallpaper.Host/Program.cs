@@ -120,6 +120,7 @@ internal static class Program
             using var transport = new HttpMarketTransport();
             var client = new MarketDataClient(transport, TimeProvider.System, Random.Shared.NextDouble);
             client.Clock.Warning += offset => Log.Warn(ClockWarning(offset));
+            client.TickDropped += reason => Log.Warn(TickDroppedWarning(reason));
             feed = new MarketFeed(client);
 
             using var monitor = new PlaybackMonitor();
@@ -185,6 +186,10 @@ internal static class Program
     internal static string ClockWarning(TimeSpan offset) => string.Create(
         CultureInfo.InvariantCulture,
         $"market data: the PC clock is {offset.Duration().TotalSeconds:0.#} s {(offset > TimeSpan.Zero ? "behind" : "ahead of")} the exchange's; candle boundaries and the countdown follow the exchange");
+
+    /// <summary>D-27: the log line when impossible exchange data was dropped (at most once a minute per reason).</summary>
+    internal static string TickDroppedWarning(string reason) =>
+        "market data: impossible exchange data dropped (" + reason + "); the chart keeps the last good data";
 
     /// <summary>Open logs (D-26): Explorer on the folder; a failure is logged, a tray click never ends the host.</summary>
     private static void OpenFolder(string path)
