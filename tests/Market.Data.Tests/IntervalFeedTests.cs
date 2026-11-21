@@ -259,6 +259,11 @@ public class IntervalFeedTests
         var ohlc = sim.Transport.Rest(Exchange.Kraken, "ohlc");
         Assert.NotEmpty(ohlc);
         var minutes = ohlc.Select(c => IntervalTransport.Query(c.Url, "interval")).Distinct().ToList();
+        if (minutes.Count > 1)
+        {
+            minutes.Remove("60"); // contract #32: the 24h ticker's own 60-minute request (chart coarser than 60 min)
+        }
+
         return int.Parse(Assert.Single(minutes)!, System.Globalization.CultureInfo.InvariantCulture);
     }
 
