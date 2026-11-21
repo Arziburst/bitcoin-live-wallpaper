@@ -115,7 +115,9 @@ public class ReturnToPrimaryTests
         Assert.Equal(77229.9m, sim.Client.Candles.Snapshot()[^1].Close); // the live Kraken update, not reloaded
         Assert.True(krakenSocket.IsOpen, "the Kraken socket was dropped by a failed Binance try");
         Assert.Single(sim.Transport.Sockets, s => s.Exchange == Exchange.Kraken);
-        Assert.Single(sim.Transport.CallsTo(Exchange.Kraken), c => !c.IsSocket); // no Kraken history reload
+        Assert.Single(
+            sim.Transport.CallsTo(Exchange.Kraken),
+            c => !c.IsSocket && c.Url.AbsolutePath.Contains("OHLC", StringComparison.OrdinalIgnoreCase)); // no Kraken history reload
         Assert.Equal(FeedState.Live, sim.Client.State);
     }
 

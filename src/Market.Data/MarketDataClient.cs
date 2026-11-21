@@ -66,6 +66,16 @@ public sealed class MarketDataClient
 
     private static readonly Uri KrakenStreamUrl = new("wss://ws.kraken.com/v2");
 
+    private static readonly Uri BinanceTimeUrl = new("https://data-api.binance.vision/api/v3/time");
+
+    private static readonly Uri KrakenTimeUrl = new("https://api.kraken.com/0/public/Time");
+
+    /// <summary>The exchange's time is asked this often while the feed is live (D-25).</summary>
+    private static readonly TimeSpan TimeSampleEvery = TimeSpan.FromMinutes(10);
+
+    /// <summary>A later time answer is useless (a round trip over 2 s is ignored anyway).</summary>
+    private static readonly TimeSpan TimeRequestTimeout = TimeSpan.FromSeconds(10);
+
     private readonly IMarketTransport transport;
     private readonly TimeProvider time;
     private readonly Func<double> jitter;
@@ -92,6 +102,11 @@ public sealed class MarketDataClient
 
     /// <summary>When Binance is tried next; set while on Kraken after a failover, null on Binance.</summary>
     private DateTimeOffset? primaryTryAt;
+
+    /// <summary>When the exchange's time is asked next while live; null before the first connect cycle's history.</summary>
+    private DateTimeOffset? timeSampleAt;
+
+    private CancellationToken runToken;
 
     /// <summary>5-minute candles.</summary>
     /// <param name="jitter">Returns a uniform draw in [0, 1); the only source of randomness.</param>
@@ -136,6 +151,13 @@ public sealed class MarketDataClient
             return time.GetUtcNow().UtcTicks - last > StaleAfter.Ticks ? FeedState.Stale : FeedState.Live;
         }
     }
+
+    /// <summary>The exchange's clock, fed by the time requests (D-25).</summary>
+    public ExchangeClock Clock { get; } = new();
+
+    /// <summary>The exchange's now: the local time corrected by <see cref="Clock"/>. Only for candle boundaries
+    /// (IsClosed) and the chart's countdown; every wait and the stale check keep the local clock.</summary>
+    public DateTimeOffset ExchangeNow => Clock.Now(time.GetUtcNow());
 
     /// <summary>Candles of Source only (capacity 1000), all of <see cref="Interval"/>.</summary>
     public CandleBuffer Candles { get; } = new();
@@ -187,6 +209,7 @@ public sealed class MarketDataClient
     /// <summary>Runs until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        runToken = cancellationToken;
         var attempt = 0;
         var failedCycles = 0;
         var refusedSockets = 0;
@@ -321,19 +344,21 @@ public sealed class MarketDataClient
             var klines = await GetOkAsync(cycleSource, cyclePlan.BinanceKlinesUrl, ct);
             var tickerJson = await GetOkAsync(cycleSource, BinanceTickerUrl, ct);
             history = new History(
-                BinanceParser.ParseKlines(klines, time.GetUtcNow()),
+                BinanceParser.ParseKlines(klines, ExchangeNow),
                 BinanceParser.ParseTicker24h(tickerJson),
                 null);
         }
         else
         {
             var ohlc = await GetOkAsync(cycleSource, cyclePlan.KrakenOhlcUrl, ct);
-            var now = time.GetUtcNow();
+            var now = ExchangeNow;
             var rows = KrakenParser.ParseOhlc(ohlc, now, cyclePlan.KrakenInterval);
             history = cyclePlan.Aggregates
                 ? new History(CandleAggregator.Aggregate(rows, cyclePlan.Interval, now), null, rows)
                 : new History(rows, null, null);
         }
+
+        SampleTime(cycleSource);
 
         try
         {
@@ -416,7 +441,7 @@ public sealed class MarketDataClient
         }
 
         var held = Candles.Snapshot();
-        var now = time.GetUtcNow();
+        var now = ExchangeNow;
         foreach (var start in touched)
         {
             if (held.Count > 0 && start < held[0].OpenTime)
@@ -489,10 +514,20 @@ public sealed class MarketDataClient
                     wakeAt = tryAt;
                 }
 
+                if (timeSampleAt is { } sampleAt && sampleAt < wakeAt)
+                {
+                    wakeAt = sampleAt;
+                }
+
                 var wait = wakeAt - time.GetUtcNow();
                 if (wait > TimeSpan.Zero)
                 {
                     await Task.Delay(wait, time, ct);
+                }
+
+                if (timeSampleAt <= time.GetUtcNow())
+                {
+                    SampleTime(source);
                 }
 
                 if (source == MarketSource.Kraken && primaryTryAt <= time.GetUtcNow())
@@ -567,7 +602,7 @@ public sealed class MarketDataClient
             {
                 var klines = await GetOkAsync(pollSource, pollPlan.BinancePollUrl, ct);
                 var tickerJson = await GetOkAsync(pollSource, BinanceTickerUrl, ct);
-                var candles = BinanceParser.ParseKlines(klines, time.GetUtcNow());
+                var candles = BinanceParser.ParseKlines(klines, ExchangeNow);
                 var restTicker = BinanceParser.ParseTicker24h(tickerJson);
                 if (Store(pollSource, pollPlan, candles))
                 {
@@ -578,7 +613,7 @@ public sealed class MarketDataClient
             {
                 var ohlc = await GetOkAsync(pollSource, KrakenPollUrl(pollPlan), ct);
                 var tickerJson = await GetOkAsync(pollSource, KrakenTickerUrl, ct);
-                var candles = KrakenParser.ParseOhlc(ohlc, time.GetUtcNow(), pollPlan.KrakenInterval);
+                var candles = KrakenParser.ParseOhlc(ohlc, ExchangeNow, pollPlan.KrakenInterval);
                 if (Store(pollSource, pollPlan, candles))
                 {
                     // Kraken's ticker "o" is today's open, not the open 24 h ago: that one comes from the candles.
@@ -627,6 +662,41 @@ public sealed class MarketDataClient
         }
     }
 
+    /// <summary>Asks the exchange's time for <see cref="Clock"/> and schedules the next ask in 10 min. Runs beside the
+    /// feed: its answer never sets notBefore, never counts as a failure and never switches the source; a failure only
+    /// means no sample this time. Not asked while the source wants to be left alone (an earlier Retry-After).</summary>
+    private void SampleTime(MarketSource timeSource)
+    {
+        var now = time.GetUtcNow();
+        timeSampleAt = now + TimeSampleEvery;
+        if (!notBefore.TryGetValue(timeSource, out var earliest) || earliest <= now)
+        {
+            _ = SampleTimeAsync(timeSource);
+        }
+    }
+
+    private async Task SampleTimeAsync(MarketSource timeSource)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeRequestTimeout, time);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(runToken, timeout.Token);
+            var binance = timeSource == MarketSource.Binance;
+            var sent = time.GetUtcNow();
+            var result = await transport.GetAsync(binance ? BinanceTimeUrl : KrakenTimeUrl, linked.Token);
+            var received = time.GetUtcNow();
+            if (result.StatusCode == 200)
+            {
+                Clock.AddSample(sent, received,
+                    binance ? BinanceParser.ParseServerTime(result.Body) : KrakenParser.ParseServerTime(result.Body));
+            }
+        }
+        catch (Exception)
+        {
+            // No sample this time; the next one is asked in 10 min.
+        }
+    }
+
     private async Task<string> GetOkAsync(MarketSource requestSource, Uri url, CancellationToken ct)
     {
         var result = await transport.GetAsync(url, ct);
@@ -667,6 +737,11 @@ public sealed class MarketDataClient
                     wakeAt = tryAt;
                 }
 
+                if (timeSampleAt is { } sampleAt && sampleAt < wakeAt)
+                {
+                    wakeAt = sampleAt;
+                }
+
                 var wait = wakeAt - time.GetUtcNow();
                 using (var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
@@ -694,6 +769,12 @@ public sealed class MarketDataClient
                 if (now >= lastMessageAt + SilenceLimit)
                 {
                     return;
+                }
+
+                if (timeSampleAt <= now)
+                {
+                    SampleTime(streamSource);
+                    continue;
                 }
 
                 if (streamSource == MarketSource.Kraken && primaryTryAt <= now)
@@ -777,7 +858,7 @@ public sealed class MarketDataClient
             }
             else
             {
-                var candles = KrakenParser.ParseWsOhlc(message, time.GetUtcNow(), messagePlan.KrakenMinutes);
+                var candles = KrakenParser.ParseWsOhlc(message, ExchangeNow, messagePlan.KrakenMinutes);
                 if (candles.Count > 0 && Store(messageSource, messagePlan, candles))
                 {
                     ticker = DeriveTicker();

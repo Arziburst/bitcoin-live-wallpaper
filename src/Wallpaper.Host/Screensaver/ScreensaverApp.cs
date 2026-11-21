@@ -38,6 +38,7 @@ internal static class ScreensaverApp
             ScreensaverLog.Info($"screensaver starting (/s) from {Environment.ProcessPath}");
             using var transport = new HttpMarketTransport();
             var client = new MarketDataClient(transport, TimeProvider.System, Random.Shared.NextDouble);
+            client.Clock.Warning += offset => ScreensaverLog.Warn(Program.ClockWarning(offset));
             using var stop = new CancellationTokenSource();
             var feed = Task.Run(() => client.RunAsync(stop.Token));
             try

@@ -29,3 +29,4 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-36** (2026-10-31) A new installer updates the program when it is already installed; the user's settings are kept.
 - **D-37** (2026-10-31) On the desktop the chart fits the work area above the taskbar; the background fills the whole monitor; the lock screen picture and the screensaver use the whole monitor.
 - **D-38** (2026-10-31) The crosshair follows the mouse anywhere on the wallpaper's monitor, whatever is under the cursor; windows and icons cover its lines.
+- **D-25** (2026-10-31) The candle boundaries and the countdown follow the exchange's clock; a wrong PC clock is corrected by the measured offset (a warning in the log above 5 s).

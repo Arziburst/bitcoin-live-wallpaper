@@ -119,6 +119,7 @@ internal static class Program
             // its own thread. The pause monitor starts once the wallpaper is first on.
             using var transport = new HttpMarketTransport();
             var client = new MarketDataClient(transport, TimeProvider.System, Random.Shared.NextDouble);
+            client.Clock.Warning += offset => Log.Warn(ClockWarning(offset));
             feed = new MarketFeed(client);
 
             using var monitor = new PlaybackMonitor();
@@ -179,6 +180,11 @@ internal static class Program
             return false;
         }
     }
+
+    /// <summary>D-25: the log line when the PC clock is more than 5 s off the exchange's.</summary>
+    internal static string ClockWarning(TimeSpan offset) => string.Create(
+        CultureInfo.InvariantCulture,
+        $"market data: the PC clock is {offset.Duration().TotalSeconds:0.#} s {(offset > TimeSpan.Zero ? "behind" : "ahead of")} the exchange's; candle boundaries and the countdown follow the exchange");
 
     /// <summary>Open logs (D-26): Explorer on the folder; a failure is logged, a tray click never ends the host.</summary>
     private static void OpenFolder(string path)

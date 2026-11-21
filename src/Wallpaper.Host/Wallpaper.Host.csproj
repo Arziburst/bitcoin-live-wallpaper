@@ -25,6 +25,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- D-25: the tests read the frames the scenes build. -->
+    <InternalsVisibleTo Include="Wallpaper.Host.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Chart.Core\Chart.Core.csproj" />
     <ProjectReference Include="..\Market.Data\Market.Data.csproj" />
     <ProjectReference Include="..\Chart.Render.D2D\Chart.Render.D2D.csproj" />

@@ -26,6 +26,10 @@ internal sealed class ExchangeScript
     /// <summary>Every REST request answers this HTTP status (e.g. 451), unless RestDown.</summary>
     public int? RestStatus { get; set; }
 
+    /// <summary>How far this exchange's clock runs ahead of the fake clock (negative: behind): added to the server time
+    /// the /time answers carry (Binance serverTime in ms, Kraken unixtime in whole seconds).</summary>
+    public TimeSpan TimeSkew { get; set; }
+
     /// <summary>Answers served, in order, before anything else (e.g. one 429 with Retry-After).</summary>
     public Queue<HttpResult> NextRestResults { get; } = new();
 
@@ -86,11 +90,11 @@ internal sealed class FakeTransport(TimeProvider time) : IMarketTransport
             Exchange.Binance when Has(path, "ticker") => Fixtures.BinanceTicker,
             Exchange.Binance when Has(path, "ping") => "{}",
             Exchange.Binance when Has(path, "time") =>
-                "{\"serverTime\":" + time.GetUtcNow().ToUnixTimeMilliseconds() + "}",
+                "{\"serverTime\":" + (time.GetUtcNow() + script.TimeSkew).ToUnixTimeMilliseconds() + "}",
             Exchange.Kraken when Has(path, "ohlc") => Fixtures.KrakenOhlc,
             Exchange.Kraken when Has(path, "ticker") => Fixtures.KrakenTicker,
             Exchange.Kraken when Has(path, "time") =>
-                "{\"error\":[],\"result\":{\"unixtime\":" + time.GetUtcNow().ToUnixTimeSeconds() + "}}",
+                "{\"error\":[],\"result\":{\"unixtime\":" + (time.GetUtcNow() + script.TimeSkew).ToUnixTimeSeconds() + "}}",
             _ => null,
         };
 
