@@ -30,3 +30,4 @@ Owner's decisions. Each entry: id, date, decision.
 - **D-37** (2026-10-31) On the desktop the chart fits the work area above the taskbar; the background fills the whole monitor; the lock screen picture and the screensaver use the whole monitor.
 - **D-38** (2026-10-31) The crosshair follows the mouse anywhere on the wallpaper's monitor, whatever is under the cursor; windows and icons cover its lines.
 - **D-25** (2026-10-31) The candle boundaries and the countdown follow the exchange's clock; a wrong PC clock is corrected by the measured offset (a warning in the log above 5 s).
+- **D-27** (2026-10-31; threshold 2026-11-21) Impossible exchange data is dropped before the chart: non-positive prices, high below low, open or close outside the range, negative volume, or a close more than 15 % from the last accepted close; each drop is logged; nothing is invented.

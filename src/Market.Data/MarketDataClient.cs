@@ -76,6 +76,16 @@ public sealed class MarketDataClient
     /// <summary>A later time answer is useless (a round trip over 2 s is ignored anyway).</summary>
     private static readonly TimeSpan TimeRequestTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>A dropped tick's reason is raised at most this often (D-27).</summary>
+    private static readonly TimeSpan DropRaiseEvery = TimeSpan.FromMinutes(1);
+
+    /// <summary>The 60-minute candles of a Kraken ticker over a coarser chart are fetched again this often while
+    /// streaming (a poll fetches them every time).</summary>
+    private static readonly TimeSpan HoursRefreshEvery = TimeSpan.FromMinutes(15);
+
+    /// <summary>The newest 720 Kraken 60-minute candles: no "since", so always the full last 24 h.</summary>
+    private static readonly Uri KrakenHoursUrl = new("https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=60");
+
     private readonly IMarketTransport transport;
     private readonly TimeProvider time;
     private readonly Func<double> jitter;
@@ -107,6 +117,19 @@ public sealed class MarketDataClient
     private DateTimeOffset? timeSampleAt;
 
     private CancellationToken runToken;
+
+    /// <summary>The last accepted close of the series' feed (D-27); set by every Commit. Guarded by gate.</summary>
+    private decimal? reference;
+
+    /// <summary>Kraken's 60-minute candles the ticker of a chart coarser than 60 min comes from; null otherwise.
+    /// Guarded by gate; never in Candles.</summary>
+    private IReadOnlyList<Candle>? hours;
+
+    private DateTimeOffset hoursAt;
+    private bool hoursFetching;
+
+    /// <summary>When each drop reason was last raised.</summary>
+    private readonly Dictionary<string, DateTimeOffset> dropRaisedAt = [];
 
     /// <summary>5-minute candles.</summary>
     /// <param name="jitter">Returns a uniform draw in [0, 1); the only source of randomness.</param>
@@ -165,6 +188,10 @@ public sealed class MarketDataClient
     /// <summary>The latest 24 h ticker, or null before the first one.</summary>
     public Ticker24h? Ticker => ticker;
 
+    /// <summary>A candle or ticker was dropped by <see cref="TickFilter"/>, with its reason; the same reason is raised
+    /// at most once a minute.</summary>
+    public event Action<string>? TickDropped;
+
     /// <summary>Another interval: before it returns, Interval is the new one and Candles holds no candle of the old
     /// one; the series is then reloaded (REST history and a new socket, the old one closed) on the client's own
     /// context. The same interval: nothing happens. Unsupported: ArgumentOutOfRangeException, nothing changes.</summary>
@@ -181,6 +208,7 @@ public sealed class MarketDataClient
 
             plan = next;
             fineCandles = [];
+            hours = null;
             if (Candles.Source is { } held)
             {
                 Candles.Reset(held, []);
@@ -344,18 +372,21 @@ public sealed class MarketDataClient
             var klines = await GetOkAsync(cycleSource, cyclePlan.BinanceKlinesUrl, ct);
             var tickerJson = await GetOkAsync(cycleSource, BinanceTickerUrl, ct);
             history = new History(
-                BinanceParser.ParseKlines(klines, ExchangeNow),
-                BinanceParser.ParseTicker24h(tickerJson),
+                Accepted(BinanceParser.ParseKlines(klines, ExchangeNow)),
+                Checked(BinanceParser.ParseTicker24h(tickerJson)),
+                null,
                 null);
         }
         else
         {
             var ohlc = await GetOkAsync(cycleSource, cyclePlan.KrakenOhlcUrl, ct);
             var now = ExchangeNow;
-            var rows = KrakenParser.ParseOhlc(ohlc, now, cyclePlan.KrakenInterval);
+            var rows = Accepted(KrakenParser.ParseOhlc(ohlc, now, cyclePlan.KrakenInterval));
+            var hourly = cyclePlan.TickerFromHours ? await GetHoursAsync(cycleSource, ct) : null;
+            var hourlyTicker = hourly is null ? null : Window(hourly);
             history = cyclePlan.Aggregates
-                ? new History(CandleAggregator.Aggregate(rows, cyclePlan.Interval, now), null, rows)
-                : new History(rows, null, null);
+                ? new History(CandleAggregator.Aggregate(rows, cyclePlan.Interval, now), hourlyTicker, rows, hourly)
+                : new History(rows, hourlyTicker, null, hourly);
         }
 
         SampleTime(cycleSource);
@@ -383,35 +414,68 @@ public sealed class MarketDataClient
 
             Candles.Reset(historySource, history.Candles);
             fineCandles = history.Fine is { } fine ? [.. fine] : [];
-            ticker = history.Ticker ?? DeriveTicker();
+            reference = (history.Fine ?? history.Candles)[^1].Close;
+            hours = history.Hours is { Count: > 0 } hourly ? hourly : null;
+            hoursAt = time.GetUtcNow();
+
+            // A dropped Binance ticker leaves the last good one (the next miniTicker replaces it).
+            ticker = history.Ticker ?? (historySource == MarketSource.Binance ? ticker : DeriveTicker());
             MarkData();
         }
     }
 
     /// <summary>Candles of the source and the plan's interval (Kraken's finer ones when the plan aggregates) into
     /// the series. False, and nothing stored, when the interval or the series' source changed meanwhile.</summary>
+    /// <remarks>Each candle passes <see cref="TickFilter"/> against the last accepted close first; false, too, when
+    /// none passed.</remarks>
     private bool Store(MarketSource candleSource, Plan candlePlan, IReadOnlyList<Candle> candles)
     {
-        lock (gate)
+        var dropped = new List<string>();
+        try
         {
-            if (candlePlan != plan || Candles.Source != candleSource)
+            lock (gate)
             {
-                return false;
-            }
+                if (candlePlan != plan || Candles.Source != candleSource)
+                {
+                    return false;
+                }
 
-            if (candleSource == MarketSource.Kraken && candlePlan.Aggregates)
-            {
-                StoreFine(candlePlan.Interval, candles);
-            }
-            else
-            {
+                var accepted = new List<Candle>(candles.Count);
                 foreach (var candle in candles)
                 {
-                    Candles.Upsert(candleSource, candle);
-                }
-            }
+                    if (TickFilter.CheckCandle(candle, reference) is { } reason)
+                    {
+                        dropped.Add(reason);
+                        continue;
+                    }
 
-            return true;
+                    accepted.Add(candle);
+                    reference = candle.Close;
+                }
+
+                if (accepted.Count == 0)
+                {
+                    return false;
+                }
+
+                if (candleSource == MarketSource.Kraken && candlePlan.Aggregates)
+                {
+                    StoreFine(candlePlan.Interval, accepted);
+                }
+                else
+                {
+                    foreach (var candle in accepted)
+                    {
+                        Candles.Upsert(candleSource, candle);
+                    }
+                }
+
+                return true;
+            }
+        }
+        finally
+        {
+            dropped.ForEach(Drop);
         }
     }
 
@@ -604,9 +668,9 @@ public sealed class MarketDataClient
                 var tickerJson = await GetOkAsync(pollSource, BinanceTickerUrl, ct);
                 var candles = BinanceParser.ParseKlines(klines, ExchangeNow);
                 var restTicker = BinanceParser.ParseTicker24h(tickerJson);
-                if (Store(pollSource, pollPlan, candles))
+                if (Store(pollSource, pollPlan, candles) && Checked(restTicker) is { } good)
                 {
-                    ticker = restTicker;
+                    ticker = good;
                 }
             }
             else
@@ -614,11 +678,23 @@ public sealed class MarketDataClient
                 var ohlc = await GetOkAsync(pollSource, KrakenPollUrl(pollPlan), ct);
                 var tickerJson = await GetOkAsync(pollSource, KrakenTickerUrl, ct);
                 var candles = KrakenParser.ParseOhlc(ohlc, ExchangeNow, pollPlan.KrakenInterval);
+                if (pollPlan.TickerFromHours)
+                {
+                    SetHours(pollPlan, await GetHoursAsync(pollSource, ct));
+                }
+
                 if (Store(pollSource, pollPlan, candles))
                 {
                     // Kraken's ticker "o" is today's open, not the open 24 h ago: that one comes from the candles.
                     var derived = DeriveTicker();
-                    ticker = derived is null ? null : KrakenParser.ParseTicker24h(tickerJson, derived.Open);
+                    if (derived is null)
+                    {
+                        ticker = null;
+                    }
+                    else if (Checked(KrakenParser.ParseTicker24h(tickerJson, derived.Open)) is { } good)
+                    {
+                        ticker = good;
+                    }
                 }
             }
 
@@ -851,8 +927,12 @@ public sealed class MarketDataClient
 
                         break;
                     case TickerUpdate update:
-                        ticker = update.Ticker;
-                        MarkData();
+                        if (Checked(update.Ticker) is { } good)
+                        {
+                            ticker = good;
+                            MarkData();
+                        }
+
                         break;
                 }
             }
@@ -863,6 +943,7 @@ public sealed class MarketDataClient
                 {
                     ticker = DeriveTicker();
                     MarkData();
+                    RefreshHoursIfDue(messagePlan);
                 }
             }
         }
@@ -874,15 +955,32 @@ public sealed class MarketDataClient
     }
 
     /// <summary>Kraken has no rolling 24 h ticker over WS: it is derived from the last 24 h of candles (the finer
-    /// ones when the series is aggregated).</summary>
+    /// ones when the series is aggregated; the 60-minute ones when the chart is coarser, with the series' newest close
+    /// as the last price).</summary>
     private Ticker24h? DeriveTicker()
     {
         IReadOnlyList<Candle> candles;
+        IReadOnlyList<Candle> held;
+        IReadOnlyList<Candle>? hourly;
         lock (gate)
         {
-            candles = fineCandles.Count > 0 ? [.. fineCandles] : Candles.Snapshot();
+            hourly = hours;
+            held = Candles.Snapshot();
+            candles = fineCandles.Count > 0 ? [.. fineCandles] : held;
         }
 
+        if (hourly is null || held.Count == 0 || Window(hourly) is not { } derived)
+        {
+            return Window(candles);
+        }
+
+        var last = held[^1].Close;
+        return JsonValues.Ticker(last, derived.Open, Math.Max(derived.High, last), Math.Min(derived.Low, last), derived.Volume);
+    }
+
+    /// <summary>The 24 h ticker of the last 24 h of <paramref name="candles"/>; null when there are none.</summary>
+    private static Ticker24h? Window(IReadOnlyList<Candle> candles)
+    {
         if (candles.Count == 0)
         {
             return null;
@@ -898,7 +996,101 @@ public sealed class MarketDataClient
             window.Sum(c => c.Volume));
     }
 
-    private void MarkData() => Interlocked.Exchange(ref lastDataTicks, time.GetUtcNow().UtcTicks);
+    /// <summary>A history's candles that pass <see cref="TickFilter"/>; none: the history fails (no Commit).</summary>
+    private IReadOnlyList<Candle> Accepted(IReadOnlyList<Candle> candles)
+    {
+        var accepted = TickFilter.FilterHistory(candles, Drop);
+        return accepted.Count > 0 ? accepted : throw new InvalidDataException("no candle of the history passed the tick filter");
+    }
+
+    /// <summary>The ticker, or null (and the drop raised) when <see cref="TickFilter"/> drops it.</summary>
+    private Ticker24h? Checked(Ticker24h candidate)
+    {
+        if (TickFilter.CheckTicker(candidate) is not { } reason)
+        {
+            return candidate;
+        }
+
+        Drop(reason);
+        return null;
+    }
+
+    /// <summary>Raises TickDropped, at most once a minute per reason.</summary>
+    private void Drop(string reason)
+    {
+        var now = time.GetUtcNow();
+        lock (dropRaisedAt)
+        {
+            if (dropRaisedAt.TryGetValue(reason, out var raised) && now - raised < DropRaiseEvery)
+            {
+                return;
+            }
+
+            dropRaisedAt[reason] = now;
+        }
+
+        TickDropped?.Invoke(reason);
+    }
+
+    /// <summary>Kraken's newest 60-minute candles that pass the filter (the ticker of a chart coarser than 60 min).</summary>
+    private async Task<IReadOnlyList<Candle>> GetHoursAsync(MarketSource hoursSource, CancellationToken ct)
+    {
+        var json = await GetOkAsync(hoursSource, KrakenHoursUrl, ct);
+        return TickFilter.FilterHistory(KrakenParser.ParseOhlc(json, ExchangeNow, TimeSpan.FromHours(1)), Drop);
+    }
+
+    private void SetHours(Plan hoursPlan, IReadOnlyList<Candle> hourly)
+    {
+        lock (gate)
+        {
+            if (hoursPlan == plan && hourly.Count > 0)
+            {
+                hours = hourly;
+                hoursAt = time.GetUtcNow();
+            }
+        }
+    }
+
+    /// <summary>While streaming Kraken coarser than 60 min, the ticker's 60-minute candles are fetched again every
+    /// 15 min beside the feed; a failure keeps the old ones.</summary>
+    private void RefreshHoursIfDue(Plan hoursPlan)
+    {
+        lock (gate)
+        {
+            if (!hoursPlan.TickerFromHours || hoursFetching || time.GetUtcNow() - hoursAt < HoursRefreshEvery)
+            {
+                return;
+            }
+
+            hoursFetching = true;
+        }
+
+        _ = RefreshHoursAsync(hoursPlan);
+    }
+
+    private async Task RefreshHoursAsync(Plan hoursPlan)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(CycleTimeout, time);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(runToken, timeout.Token);
+            SetHours(hoursPlan, await GetHoursAsync(MarketSource.Kraken, linked.Token));
+        }
+        catch (Exception)
+        {
+            // The old 60-minute candles stay; a stream message 15 min later tries again.
+        }
+        finally
+        {
+            lock (gate)
+            {
+                hoursFetching = false;
+                hoursAt = time.GetUtcNow();
+            }
+        }
+    }
+
+    private void MarkData() =>Interlocked.Exchange(ref lastDataTicks, time.GetUtcNow().UtcTicks);
 
     private static void CancelQuietly(CancellationTokenSource cts)
     {
@@ -932,9 +1124,11 @@ public sealed class MarketDataClient
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
-    /// <summary>A connect cycle's REST history; Ticker null when it is derived from the candles (Kraken); Fine the
-    /// Kraken candles an aggregated series was made from.</summary>
-    private sealed record History(IReadOnlyList<Candle> Candles, Ticker24h? Ticker, IReadOnlyList<Candle>? Fine);
+    /// <summary>A connect cycle's REST history; Ticker null when it is derived from the candles (Kraken) or was
+    /// dropped; Fine the Kraken candles an aggregated series was made from; Hours the Kraken 60-minute candles of the
+    /// ticker of a chart coarser than 60 min.</summary>
+    private sealed record History(
+        IReadOnlyList<Candle> Candles, Ticker24h? Ticker, IReadOnlyList<Candle>? Fine, IReadOnlyList<Candle>? Hours);
 
     /// <summary>The requests of one candle interval.</summary>
     private sealed record Plan(TimeSpan Interval, string Code, int KrakenMinutes)
@@ -945,6 +1139,9 @@ public sealed class MarketDataClient
         public bool Aggregates => KrakenMinutes != (int)Interval.TotalMinutes;
 
         public TimeSpan KrakenInterval => TimeSpan.FromMinutes(KrakenMinutes);
+
+        /// <summary>Kraken's candles are coarser than 60 min: its 24 h ticker comes from separate 60-minute candles.</summary>
+        public bool TickerFromHours => KrakenMinutes > 60;
 
         public string BinanceKlines => $"https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval={Code}";
 
