@@ -62,11 +62,11 @@ public class ExchangeTimeClientTests
     private static string BinanceKline(decimal close) =>
         "{\"e\":\"kline\",\"E\":1793412330000,\"s\":\"BTCUSDT\",\"k\":{\"t\":1793412300000,\"T\":1793412599999,\"s\":\"BTCUSDT\"," +
         "\"i\":\"5m\",\"o\":\"77385.25000000\",\"c\":\"" + close.ToString(CultureInfo.InvariantCulture) + "\",\"h\":\"77999.00000000\"," +
-        "\"l\":\"77000.00000000\",\"v\":\"2.10413000\",\"x\":false}}";
+        "\"l\":\"60000.00000000\",\"v\":\"2.10413000\",\"x\":false}}";
 
     private static string KrakenUpdate(decimal close) =>
         "{\"channel\":\"ohlc\",\"type\":\"update\",\"timestamp\":\"2026-10-31T02:05:31.009871233Z\",\"data\":[{\"symbol\":\"BTC/USD\"," +
-        "\"open\":77218.7,\"high\":77999.0,\"low\":77000.0,\"close\":" + close.ToString(CultureInfo.InvariantCulture) +
+        "\"open\":77218.7,\"high\":77999.0,\"low\":60000.0,\"close\":" + close.ToString(CultureInfo.InvariantCulture) +
         ",\"trades\":45,\"volume\":0.81234567,\"vwap\":77224.1,\"interval_begin\":\"2026-10-31T02:05:00.000000000Z\"," +
         "\"interval\":5,\"timestamp\":\"2026-10-31T02:10:00.000000Z\"}]}";
 
