@@ -668,9 +668,16 @@ public sealed class MarketDataClient
                 var tickerJson = await GetOkAsync(pollSource, BinanceTickerUrl, ct);
                 var candles = BinanceParser.ParseKlines(klines, ExchangeNow);
                 var restTicker = BinanceParser.ParseTicker24h(tickerJson);
-                if (Store(pollSource, pollPlan, candles) && Checked(restTicker) is { } good)
+                var stored = Store(pollSource, pollPlan, candles);
+                if (Checked(restTicker) is { } good)
                 {
                     ticker = good;
+                }
+
+                if (!stored)
+                {
+                    // No candle passed the filter: no fresh data, a failed poll (the ticker stands on its own rules).
+                    return false;
                 }
             }
             else
@@ -1033,11 +1040,11 @@ public sealed class MarketDataClient
     }
 
     /// <summary>Kraken's newest 60-minute candles that pass the filter (the ticker of a chart coarser than 60 min).</summary>
-    private async Task<IReadOnlyList<Candle>> GetHoursAsync(MarketSource hoursSource, CancellationToken ct)
-    {
-        var json = await GetOkAsync(hoursSource, KrakenHoursUrl, ct);
-        return TickFilter.FilterHistory(KrakenParser.ParseOhlc(json, ExchangeNow, TimeSpan.FromHours(1)), Drop);
-    }
+    private async Task<IReadOnlyList<Candle>> GetHoursAsync(MarketSource hoursSource, CancellationToken ct) =>
+        ParseHours(await GetOkAsync(hoursSource, KrakenHoursUrl, ct));
+
+    private IReadOnlyList<Candle> ParseHours(string json) =>
+        TickFilter.FilterHistory(KrakenParser.ParseOhlc(json, ExchangeNow, TimeSpan.FromHours(1)), Drop);
 
     private void SetHours(Plan hoursPlan, IReadOnlyList<Candle> hourly)
     {
@@ -1057,7 +1064,9 @@ public sealed class MarketDataClient
     {
         lock (gate)
         {
-            if (!hoursPlan.TickerFromHours || hoursFetching || time.GetUtcNow() - hoursAt < HoursRefreshEvery)
+            var now = time.GetUtcNow();
+            if (!hoursPlan.TickerFromHours || hoursFetching || now - hoursAt < HoursRefreshEvery ||
+                (notBefore.TryGetValue(MarketSource.Kraken, out var earliest) && earliest > now))
             {
                 return;
             }
@@ -1074,7 +1083,12 @@ public sealed class MarketDataClient
         {
             using var timeout = new CancellationTokenSource(CycleTimeout, time);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(runToken, timeout.Token);
-            SetHours(hoursPlan, await GetHoursAsync(MarketSource.Kraken, linked.Token));
+            // Beside the feed, like the time requests: its answer never sets notBefore and never fails the feed.
+            var result = await transport.GetAsync(KrakenHoursUrl, linked.Token);
+            if (result.StatusCode == 200)
+            {
+                SetHours(hoursPlan, ParseHours(result.Body));
+            }
         }
         catch (Exception)
         {
@@ -1090,7 +1104,7 @@ public sealed class MarketDataClient
         }
     }
 
-    private void MarkData() =>Interlocked.Exchange(ref lastDataTicks, time.GetUtcNow().UtcTicks);
+    private void MarkData() => Interlocked.Exchange(ref lastDataTicks, time.GetUtcNow().UtcTicks);
 
     private static void CancelQuietly(CancellationTokenSource cts)
     {
