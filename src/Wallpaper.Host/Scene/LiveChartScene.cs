@@ -138,19 +138,33 @@ internal sealed partial class LiveChartScene : IAnimatedScene
 
     public void Draw(ID2D1DeviceContext context, SurfacePlacement placement)
     {
-        var now = _time.GetUtcNow();
+        var frame = BuildFrame(placement);
+        if (_live is null)
+        {
+            _renderer.Draw(context, frame);
+            return;
+        }
+
+        _lastFrame = frame;
+        _renderer.Draw(context, _lastFrame with { Cursor = _cursor });
+    }
+
+    /// <summary>The frame <see cref="Draw"/> renders, the cursor excluded (the empty frame before Start); Now is the
+    /// exchange's time (D-25).</summary>
+    internal ChartFrame BuildFrame(SurfacePlacement placement)
+    {
+        var now = _client.ExchangeNow;
         var content = ContentFor(placement);
         if (_live is null)
         {
-            _renderer.Draw(context, ChartFrame.Create(
-                placement.Width, placement.Height, placement.Scale, [], null, now, TimeZoneInfo.Local, content: content));
-            return;
+            return ChartFrame.Create(
+                placement.Width, placement.Height, placement.Scale, [], null, now, TimeZoneInfo.Local, content: content);
         }
 
         OnDisplay(placement, content);
         var frame = _live.TakeFrame();
         var kraken = _client.Candles.Source == MarketSource.Kraken;
-        _lastFrame = ChartFrame.Create(
+        return ChartFrame.Create(
             placement.Width,
             placement.Height,
             placement.Scale,
@@ -166,7 +180,6 @@ internal sealed partial class LiveChartScene : IAnimatedScene
             pulseUp: frame.PulseUp,
             interval: _interval,
             content: content);
-        _renderer.Draw(context, _lastFrame with { Cursor = _cursor });
     }
 
     public void Dispose()

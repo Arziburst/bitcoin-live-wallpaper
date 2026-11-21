@@ -48,6 +48,19 @@ public static class KrakenParser
         return candles;
     }
 
+    /// <summary>REST /0/public/Time: {"error":[],"result":{"unixtime": whole seconds}}.</summary>
+    public static DateTimeOffset ParseServerTime(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("error", out var errors) && errors.GetArrayLength() > 0)
+        {
+            throw new FormatException("Kraken error: " + errors.GetRawText());
+        }
+
+        return DateTimeOffset.FromUnixTimeSeconds(JsonValues.Int64(root.GetProperty("result").GetProperty("unixtime")));
+    }
+
     /// <summary>REST /0/public/Ticker: last trade (c), high, low and volume of the last 24 h (h, l, v at
     /// index 1). Kraken's "o" is today's open, so the open 24 h ago is passed in.</summary>
     public static Ticker24h ParseTicker24h(string json, decimal open24h)

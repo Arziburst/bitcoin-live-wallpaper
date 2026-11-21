@@ -12,9 +12,12 @@ namespace BitcoinWallpaper.Host.LockScreenChart;
 /// the first live data, a new candle and the 30-minute refresh. A due refresh takes the client's candles as they are
 /// (the resting picture, no tween), and renders them offscreen with the wallpaper's own renderer at the wallpaper's
 /// monitor size, writes the PNG and sets it on the thread pool: the host thread never waits for it. Turning the tray
-/// item off restores the user's picture. One lock screen job at a time, in order.
+/// item off restores the user's picture. One lock screen job at a time, in order. The frame's Now is the exchange's
+/// time (D-25); the refresh timing keeps the TimeProvider.
 /// </summary>
-internal sealed class LockScreenUpdater(MarketDataClient client, LockScreenImages images, TimeProvider time, bool featureOn)
+/// <param name="frameSink">Sees each frame (host thread) just before it is queued for rendering.</param>
+internal sealed class LockScreenUpdater(
+    MarketDataClient client, LockScreenImages images, TimeProvider time, bool featureOn, Action<ChartFrame>? frameSink = null)
 {
     private static readonly TimeSpan CheckEvery = TimeSpan.FromSeconds(1);
 
@@ -73,12 +76,13 @@ internal sealed class LockScreenUpdater(MarketDataClient client, LockScreenImage
                 surface.Scale,
                 candles,
                 client.Ticker,
-                now,
+                client.ExchangeNow,
                 TimeZoneInfo.Local,
                 pair: kraken ? "BTC/USD" : "BTC/USDT",
                 source: kraken ? "Kraken" : "Binance",
                 interval: client.Interval,
                 content: SurfaceContent.FullMonitor(surface.Width, surface.Height)); // D-37: no taskbar on the lock screen
+            frameSink?.Invoke(frame);
             _busy = true;
             Enqueue(() => SetAsync(frame, now, candleOpen));
         }

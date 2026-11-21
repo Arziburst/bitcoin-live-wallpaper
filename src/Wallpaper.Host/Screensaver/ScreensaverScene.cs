@@ -17,7 +17,6 @@ namespace BitcoinWallpaper.Host.Screensaver;
 internal sealed class ScreensaverScene : IWallpaperScene, IFrameHost, IDisposable
 {
     private readonly MarketDataClient _client;
-    private readonly TimeProvider _time;
     private readonly Action _requestFrame;
     private readonly IDWriteFactory5 _dwrite;
     private readonly ChartFonts _fonts;
@@ -31,7 +30,6 @@ internal sealed class ScreensaverScene : IWallpaperScene, IFrameHost, IDisposabl
     public ScreensaverScene(MarketDataClient client, TimeProvider time, Action requestFrame)
     {
         _client = client;
-        _time = time;
         _requestFrame = requestFrame;
         _dwrite = DWrite.DWriteCreateFactory<IDWriteFactory5>(Vortice.DirectWrite.FactoryType.Isolated);
         _fonts = ChartFonts.Load(_dwrite);
@@ -63,18 +61,21 @@ internal sealed class ScreensaverScene : IWallpaperScene, IFrameHost, IDisposabl
         _live.OnFeedStale(state == FeedState.Stale);
     }
 
-    public void Draw(ID2D1DeviceContext context, SurfacePlacement placement)
+    public void Draw(ID2D1DeviceContext context, SurfacePlacement placement) => _renderer.Draw(context, BuildFrame(placement));
+
+    /// <summary>The frame <see cref="Draw"/> renders; Now is the exchange's time (D-25).</summary>
+    internal ChartFrame BuildFrame(SurfacePlacement placement)
     {
         OnDisplay(placement);
         var frame = _live.TakeFrame();
         var kraken = _client.Candles.Source == MarketSource.Kraken;
-        _renderer.Draw(context, ChartFrame.Create(
+        return ChartFrame.Create(
             placement.Width,
             placement.Height,
             placement.Scale,
             frame.Candles,
             frame.Ticker,
-            _time.GetUtcNow(),
+            _client.ExchangeNow,
             TimeZoneInfo.Local,
             pair: kraken ? "BTC/USD" : "BTC/USDT",
             source: kraken ? "Kraken" : "Binance",
@@ -83,7 +84,7 @@ internal sealed class ScreensaverScene : IWallpaperScene, IFrameHost, IDisposabl
             pulse: frame.Pulse,
             pulseUp: frame.PulseUp,
             interval: _interval,
-            content: SurfaceContent.FullMonitor(placement.Width, placement.Height))); // D-37: the screensaver covers the taskbar
+            content: SurfaceContent.FullMonitor(placement.Width, placement.Height)); // D-37: the screensaver covers the taskbar
     }
 
     void IFrameHost.RequestFrame() => _requestFrame();

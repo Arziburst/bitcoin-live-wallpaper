@@ -29,6 +29,13 @@ public static class BinanceParser
         return candles;
     }
 
+    /// <summary>REST /api/v3/time: {"serverTime": ms}.</summary>
+    public static DateTimeOffset ParseServerTime(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return DateTimeOffset.FromUnixTimeMilliseconds(JsonValues.Int64(doc.RootElement.GetProperty("serverTime")));
+    }
+
     /// <summary>REST /api/v3/ticker/24hr.</summary>
     public static Ticker24h ParseTicker24h(string json)
     {
